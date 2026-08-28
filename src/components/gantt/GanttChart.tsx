@@ -35,6 +35,7 @@ export function GanttChart({
   onLinkTasks,
   onSelectTask,
   onReorderTask,
+  onReorderModule,
   todayIso,
 }: {
   tasks: ScheduleTask[]
@@ -49,6 +50,7 @@ export function GanttChart({
   onLinkTasks: (predecessorId: string, successorId: string) => void
   onSelectTask: (taskId: string) => void
   onReorderTask: (taskId: string, direction: 'up' | 'down') => void
+  onReorderModule: (moduleKey: string, direction: 'up' | 'down') => void
   todayIso: string
 }) {
   const dayWidth = DAY_WIDTH[zoom]
@@ -97,6 +99,16 @@ export function GanttChart({
         map.set(t.id, { isFirst: i === 0, isLast: i === moduleTasks.length - 1 })
       })
     }
+    return map
+  }, [grouped])
+
+  // Position of each module among all modules — same idea, for the module
+  // reorder buttons.
+  const moduleOrderInfo = useMemo(() => {
+    const map = new Map<string, { isFirst: boolean; isLast: boolean }>()
+    grouped.forEach(([key], i) => {
+      map.set(key, { isFirst: i === 0, isLast: i === grouped.length - 1 })
+    })
     return map
   }, [grouped])
 
@@ -218,17 +230,41 @@ export function GanttChart({
         <div className="relative" style={{ height: bodyHeight }}>
           {visibleRows.map((row, i) =>
             row.type === 'module' ? (
-              <button
+              <div
                 key={row.key}
-                onClick={() => onToggleModule(row.key)}
-                className="absolute left-0 flex w-full items-center gap-1.5 border-b border-brand-line bg-slate-50 px-2 text-left text-xs font-bold"
+                className="group absolute left-0 flex w-full items-center gap-1 border-b border-brand-line bg-slate-50 px-2 text-xs font-bold"
                 style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT, color: moduleColor(row.label) }}
               >
-                {row.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                <span className="truncate">
-                  {row.label} ({row.count})
-                </span>
-              </button>
+                <button
+                  onClick={() => onToggleModule(row.key)}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                >
+                  {row.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                  <span className="truncate">
+                    {row.label} ({row.count})
+                  </span>
+                </button>
+                {editable && (
+                  <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button
+                      onClick={() => onReorderModule(row.key, 'up')}
+                      disabled={moduleOrderInfo.get(row.key)?.isFirst}
+                      title="Move module up (its activities move with it)"
+                      className="rounded p-0.5 hover:bg-slate-200 disabled:pointer-events-none disabled:opacity-30"
+                    >
+                      <ChevronUp size={13} />
+                    </button>
+                    <button
+                      onClick={() => onReorderModule(row.key, 'down')}
+                      disabled={moduleOrderInfo.get(row.key)?.isLast}
+                      title="Move module down (its activities move with it)"
+                      className="rounded p-0.5 hover:bg-slate-200 disabled:pointer-events-none disabled:opacity-30"
+                    >
+                      <ChevronDown size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
               <div
                 key={row.key}

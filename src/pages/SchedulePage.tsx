@@ -93,23 +93,25 @@ export function SchedulePage() {
     refresh()
   }, [])
 
-  const displayTasks = useMemo(() => {
+  // Task sort_order is a single global order key (not per-module): sorting
+  // every task by it and grouping by module while keeping first-appearance
+  // order gives both the module sequence AND each module's task sequence
+  // from one field, with no separate "module order" to store. Reordering a
+  // module just means moving its whole contiguous block within this list.
+  const moduleBlocks = useMemo(() => {
+    const sorted = [...tasks].sort(
+      (a, b) => a.sort_order - b.sort_order || a.start_date.localeCompare(b.start_date) || a.id.localeCompare(b.id)
+    )
     const byModule = new Map<string, ScheduleTask[]>()
-    for (const t of tasks) {
+    for (const t of sorted) {
       const key = t.module || 'Ungrouped'
       if (!byModule.has(key)) byModule.set(key, [])
       byModule.get(key)!.push(t)
     }
-    const moduleNames = Array.from(byModule.keys()).sort((a, b) => a.localeCompare(b))
-    const result: ScheduleTask[] = []
-    for (const name of moduleNames) {
-      const group = byModule
-        .get(name)!
-        .sort((a, b) => a.sort_order - b.sort_order || a.start_date.localeCompare(b.start_date))
-      result.push(...group)
-    }
-    return result
+    return Array.from(byModule.entries()).map(([module, moduleTasks]) => ({ module, tasks: moduleTasks }))
   }, [tasks])
+
+  const displayTasks = useMemo(() => moduleBlocks.flatMap((b) => b.tasks), [moduleBlocks])
 
   const moduleNames = useMemo(
     () => Array.from(new Set(tasks.map((t) => t.module).filter((m): m is string => !!m))).sort(),
@@ -154,33 +156,50 @@ export function SchedulePage() {
     }
   }
 
-  async function handleReorderTask(taskId: string, direction: 'up' | 'down') {
-    const task = tasks.find((t) => t.id === taskId)
-    if (!task) return
-    const moduleKey = task.module || null
-    const siblings = tasks
-      .filter((t) => (t.module || null) === moduleKey)
-      .sort((a, b) => a.sort_order - b.sort_order || a.start_date.localeCompare(b.start_date) || a.id.localeCompare(b.id))
-    const idx = siblings.findIndex((t) => t.id === taskId)
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
-    if (idx === -1 || swapIdx < 0 || swapIdx >= siblings.length) return
-
-    // Renumber the whole sibling group sequentially, then swap the two
-    // positions — a plain value-swap would no-op whenever both tasks still
-    // share the default sort_order of 0 (true for every task until the
-    // first reorder), so this guarantees a real, persisted order change.
-    const reordered = [...siblings]
-    ;[reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]]
-    const updates = reordered.map((t, i) => ({ id: t.id, sort_order: i }))
-
+  // Renumbers every task to a fresh global 0..N-1 sort_order matching
+  // `newFlatOrder`, then persists only the ones that actually moved. Shared
+  // by both reorder actions below — a task swap changes 2 rows, a module
+  // swap changes every task in the two swapped modules, and diffing against
+  // current state is simpler than each caller reasoning about which rows
+  // moved.
+  async function persistNewOrder(newFlatOrder: ScheduleTask[]) {
+    const currentById = new Map(tasks.map((t) => [t.id, t.sort_order]))
+    const updates = newFlatOrder
+      .map((t, i) => ({ id: t.id, sort_order: i }))
+      .filter((u) => currentById.get(u.id) !== u.sort_order)
+    if (updates.length === 0) return
     const byId = new Map(updates.map((u) => [u.id, u.sort_order]))
     setTasks((prev) => prev.map((t) => (byId.has(t.id) ? { ...t, sort_order: byId.get(t.id)! } : t)))
     try {
       await Promise.all(updates.map((u) => updateTask(u.id, { sort_order: u.sort_order })))
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to reorder tasks')
+      setError(e instanceof Error ? e.message : 'Failed to reorder')
       await refresh()
     }
+  }
+
+  async function handleReorderTask(taskId: string, direction: 'up' | 'down') {
+    const blockIdx = moduleBlocks.findIndex((b) => b.tasks.some((t) => t.id === taskId))
+    if (blockIdx === -1) return
+    const block = moduleBlocks[blockIdx]
+    const idx = block.tasks.findIndex((t) => t.id === taskId)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= block.tasks.length) return
+
+    const reorderedTasks = [...block.tasks]
+    ;[reorderedTasks[idx], reorderedTasks[swapIdx]] = [reorderedTasks[swapIdx], reorderedTasks[idx]]
+    const newBlocks = moduleBlocks.map((b, i) => (i === blockIdx ? { ...b, tasks: reorderedTasks } : b))
+    await persistNewOrder(newBlocks.flatMap((b) => b.tasks))
+  }
+
+  async function handleReorderModule(moduleKey: string, direction: 'up' | 'down') {
+    const idx = moduleBlocks.findIndex((b) => b.module === moduleKey)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (idx === -1 || swapIdx < 0 || swapIdx >= moduleBlocks.length) return
+
+    const newBlocks = [...moduleBlocks]
+    ;[newBlocks[idx], newBlocks[swapIdx]] = [newBlocks[swapIdx], newBlocks[idx]]
+    await persistNewOrder(newBlocks.flatMap((b) => b.tasks))
   }
 
   async function handleLinkTasks(predecessorId: string, successorId: string) {
@@ -485,6 +504,7 @@ export function SchedulePage() {
           onTaskDatesChange={handleTaskDatesChange}
           onLinkTasks={handleLinkTasks}
           onReorderTask={handleReorderTask}
+          onReorderModule={handleReorderModule}
           onSelectTask={(taskId) => {
             if (!editable) return
             const task = tasks.find((t) => t.id === taskId)
@@ -499,6 +519,7 @@ export function SchedulePage() {
           Drag a bar to reschedule it, drag its edges to change duration, or drag from the small dot on its right edge onto
           another task to link them — dependent tasks push forward automatically. Click a bar to edit its details. Hover a
           row in the Activities list to reveal up/down arrows for reordering — the bar chart follows the new sequence.
+          Reordering a module moves it, and all its activities, as one block.
         </p>
       )}
 
