@@ -45,9 +45,10 @@ Two roles, kept intentionally minimal:
   accounts, saves PDF reports to the project.
 - **Viewer** — sees the same chart read-only, can download a PDF.
 
-No forced password changes, no passwordless magic-link flow (that's the
-drawing-tracker app's pattern, not needed here) — an Editor sets a new
-account's initial password directly and shares it out of band.
+No passwords anywhere — every account (Editor or Viewer) signs in with an
+emailed magic link. An Editor creates a new account with just a name, email,
+and role; that person's first sign-in is the same "enter your email, click
+the link" flow as everyone else's.
 
 ## Setup
 
@@ -65,8 +66,9 @@ account's initial password directly and shares it out of band.
    npm run dev
    ```
 4. Open the app — since no Editor account exists yet, it shows "Set up the
-   first Editor account." Create it, then use **Users** to add more Editor
-   or Viewer accounts.
+   first Editor account." Fill in name + email, then check that inbox for
+   the sign-in link. Once in, use **Users** to add more Editor or Viewer
+   accounts.
 
 ## Project structure
 

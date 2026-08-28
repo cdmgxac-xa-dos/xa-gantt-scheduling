@@ -1,24 +1,19 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { GanttChart, Loader2, ShieldCheck } from 'lucide-react'
-import { bootstrapFirstEditor, editorExists, signInWithPassword } from '@/services/authService'
-import { useAuth } from '@/context/AuthContext'
+import { GanttChart, Loader2, MailCheck, ShieldCheck } from 'lucide-react'
+import { bootstrapFirstEditor, editorExists, requestMagicLink } from '@/services/authService'
 
 type Mode = 'loading' | 'bootstrap' | 'ready'
 
 export function LoginPage() {
-  const navigate = useNavigate()
-  const { refreshUser } = useAuth()
   const [mode, setMode] = useState<Mode>('loading')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [sentTo, setSentTo] = useState<string | null>(null)
 
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
 
   const [bootstrapName, setBootstrapName] = useState('')
   const [bootstrapEmail, setBootstrapEmail] = useState('')
-  const [bootstrapPassword, setBootstrapPassword] = useState('')
 
   useEffect(() => {
     editorExists()
@@ -34,10 +29,9 @@ export function LoginPage() {
     setBusy(true)
     setError('')
     try {
-      await bootstrapFirstEditor(bootstrapName, bootstrapEmail, bootstrapPassword)
-      await signInWithPassword(bootstrapEmail, bootstrapPassword)
-      await refreshUser()
-      navigate('/', { replace: true })
+      await bootstrapFirstEditor(bootstrapName, bootstrapEmail)
+      await requestMagicLink(bootstrapEmail)
+      setSentTo(bootstrapEmail)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Setup failed')
     } finally {
@@ -45,16 +39,15 @@ export function LoginPage() {
     }
   }
 
-  async function handleLogin(e: React.FormEvent) {
+  async function handleRequestLink(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError('')
     try {
-      await signInWithPassword(email, password)
-      await refreshUser()
-      navigate('/', { replace: true })
+      await requestMagicLink(email)
+      setSentTo(email)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sign-in failed')
+      setError(e instanceof Error ? e.message : 'Could not send sign-in link')
     } finally {
       setBusy(false)
     }
@@ -80,36 +73,50 @@ export function LoginPage() {
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-pop">
-          {mode === 'bootstrap' ? (
+          {sentTo ? (
+            <div className="flex flex-col items-center gap-3 py-4 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-tint text-brand-teal">
+                <MailCheck size={22} />
+              </div>
+              <p className="text-sm font-semibold text-brand-ink">Check your email, {sentTo}</p>
+              <p className="text-sm text-brand-slate">
+                We sent a sign-in link to your inbox — no password needed. Open it on this device to continue.
+              </p>
+              <button
+                onClick={() => setSentTo(null)}
+                className="mt-1 text-sm font-semibold text-brand-teal hover:underline"
+              >
+                ← Back
+              </button>
+            </div>
+          ) : mode === 'bootstrap' ? (
             <>
               <div className="mb-4 flex items-center gap-2 text-brand-ink">
                 <ShieldCheck size={18} />
                 <h2 className="font-semibold">Set up the first Editor account</h2>
               </div>
               <p className="mb-4 text-sm text-brand-slate">
-                No account exists yet. An Editor can create/edit the schedule and add more accounts.
+                No account exists yet. An Editor can create/edit the schedule and add more accounts — no password,
+                just a sign-in link sent to your email.
               </p>
               <form onSubmit={handleBootstrap} className="space-y-3">
                 <Field label="Full name" value={bootstrapName} onChange={setBootstrapName} required />
                 <Field label="Email" type="email" value={bootstrapEmail} onChange={setBootstrapEmail} required />
-                <Field
-                  label="Password"
-                  type="password"
-                  value={bootstrapPassword}
-                  onChange={setBootstrapPassword}
-                  required
-                />
                 {error && <p className="text-sm text-red-600">{error}</p>}
                 <SubmitButton busy={busy} label="Create editor account" />
               </form>
             </>
           ) : (
-            <form onSubmit={handleLogin} className="space-y-3">
-              <Field label="Email" type="email" value={email} onChange={setEmail} required />
-              <Field label="Password" type="password" value={password} onChange={setPassword} required />
-              {error && <p className="text-sm text-red-600">{error}</p>}
-              <SubmitButton busy={busy} label="Sign in" />
-            </form>
+            <>
+              <p className="mb-4 text-sm text-brand-slate">
+                No password — enter your email and we'll send you a sign-in link.
+              </p>
+              <form onSubmit={handleRequestLink} className="space-y-3">
+                <Field label="Email" type="email" value={email} onChange={setEmail} required />
+                {error && <p className="text-sm text-red-600">{error}</p>}
+                <SubmitButton busy={busy} label="Send sign-in link" />
+              </form>
+            </>
           )}
         </div>
       </div>

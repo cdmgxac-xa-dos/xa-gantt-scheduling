@@ -15,7 +15,6 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true)
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [role, setRole] = useState<AppRole>('viewer')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
@@ -47,11 +46,10 @@ export function UsersPage() {
     setNotice('')
     setCreating(true)
     try {
-      await createAccount(fullName.trim(), email.trim(), password, role)
-      setNotice(`${fullName} can now sign in at this app's login page with the password you set.`)
+      await createAccount(fullName.trim(), email.trim(), role)
+      setNotice(`${fullName} can now sign in at this app's login page — no password, just their email.`)
       setFullName('')
       setEmail('')
-      setPassword('')
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create account')
@@ -130,19 +128,7 @@ export function UsersPage() {
               className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
             />
           </label>
-          <label className="block">
-            <span className="mb-1 block text-xs font-semibold text-brand-slate">Password</span>
-            <input
-              required
-              minLength={6}
-              type="text"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Share this with them separately"
-              className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
+          <label className="block sm:col-span-2">
             <span className="mb-1 block text-xs font-semibold text-brand-slate">Role</span>
             <select
               value={role}
