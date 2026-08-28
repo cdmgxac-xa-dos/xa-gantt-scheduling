@@ -72,6 +72,15 @@ current single-project version. Pick this up when asked.
     `/tmp/*.pdf`, then rasterize with PyMuPDF (`pip install pymupdf`,
     `page.get_pixmap(dpi=150).save(...)`) and actually look at the PNG
     before shipping. Delete `pdf-test.tsx` afterward — never commit it.
+- **Excel export** (`src/lib/scheduleExcelExport.ts`, exceljs, lazy-loaded
+  from `SchedulePage.tsx` the same way as the PDF renderer): headless
+  LibreOffice in this environment cannot load *any* xlsx — confirmed with a
+  trivial two-cell file, not specific to this export — so there's no visual
+  render available for it here. Verification instead means writing a sample
+  workbook and reading it back with exceljs itself (cell values, fills,
+  merges, borders) and checking the numbers against hand-computed expected
+  column ranges. If a real xlsx-to-image path is ever needed, try installing
+  a fresh LibreOffice rather than trusting the one in this sandbox.
 - **Netlify deploys**: `netlify-deploy-services-updater` (`deploy-site`)
   returns a shell command with a signed, short-lived `--proxy-path` token —
   run it via Bash from the repo root. A Cloudflare 502
