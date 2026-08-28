@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Loader2,
   Plus,
-  Download,
+  Printer,
   Save,
   CalendarClock,
   Eraser,
@@ -251,19 +251,23 @@ export function SchedulePage() {
     ).toBlob()
   }
 
-  async function handleDownloadPdf() {
+  async function handlePreviewPdf() {
     setExporting('download')
+    // Open the tab synchronously, in direct response to the click — opening
+    // it only after the (async) blob is ready gets treated as a background
+    // popup and blocked by most browsers.
+    const previewWindow = window.open('', '_blank')
     try {
       const blob = await buildPdfBlob()
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `Project-Schedule-${todayIso()}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
+      if (previewWindow) {
+        previewWindow.location.href = url
+      } else {
+        // Popup blocked — fall back to navigating this tab instead of losing the export.
+        window.location.href = url
+      }
     } catch (e) {
+      previewWindow?.close()
       setError(e instanceof Error ? e.message : 'Failed to generate PDF')
     } finally {
       setExporting(null)
@@ -382,9 +386,9 @@ export function SchedulePage() {
             </>
           )}
           <ToolbarButton
-            icon={Download}
-            label="Download PDF"
-            onClick={handleDownloadPdf}
+            icon={Printer}
+            label="Preview / Print"
+            onClick={handlePreviewPdf}
             disabled={exporting !== null}
             loading={exporting === 'download'}
           />
@@ -656,7 +660,7 @@ function ToolbarButton({
   disabled,
   loading,
 }: {
-  icon: typeof Download
+  icon: typeof Printer
   label: string
   onClick: () => void
   disabled?: boolean
