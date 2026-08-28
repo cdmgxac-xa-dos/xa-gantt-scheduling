@@ -65,9 +65,23 @@ export async function createAccount(fullName: string, email: string, role: AppRo
   if (userError) throw userError
 }
 
-/** Sends a sign-in link to the given email — the only way in, for every role. */
+/**
+ * Sends a sign-in link to the given email — the only way in, for every role.
+ *
+ * This Supabase project is shared across several apps, and its Auth "Site
+ * URL" belongs to a different one of them — leaving it on the default would
+ * send every magic link there instead of back to this app. Passing
+ * emailRedirectTo explicitly overrides that per-request, so it's independent
+ * of whatever the shared project's default happens to be. (The target origin
+ * still has to be added to that project's Auth → URL Configuration →
+ * Redirect URLs allow-list, or Supabase silently falls back to Site URL
+ * anyway — that's a dashboard-only setting, can't be done from here.)
+ */
 export async function requestMagicLink(email: string) {
-  const { error } = await requireSupabase().auth.signInWithOtp({ email })
+  const { error } = await requireSupabase().auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.origin },
+  })
   if (error) throw error
 }
 
