@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp } from 'lucide-react'
 import type { ScheduleDependency, ScheduleTask } from '@/types'
 import { addDays } from '@/lib/scheduleEngine'
 import {
@@ -34,6 +34,7 @@ export function GanttChart({
   onTaskDatesChange,
   onLinkTasks,
   onSelectTask,
+  onReorderTask,
   todayIso,
 }: {
   tasks: ScheduleTask[]
@@ -47,6 +48,7 @@ export function GanttChart({
   onTaskDatesChange: (taskId: string, window: { start_date: string; end_date: string }) => void
   onLinkTasks: (predecessorId: string, successorId: string) => void
   onSelectTask: (taskId: string) => void
+  onReorderTask: (taskId: string, direction: 'up' | 'down') => void
   todayIso: string
 }) {
   const dayWidth = DAY_WIDTH[zoom]
@@ -85,6 +87,18 @@ export function GanttChart({
     })
     return map
   }, [visibleRows])
+
+  // Position within its own module group — determines whether the "move
+  // up"/"move down" reorder buttons are usable for that task.
+  const taskOrderInfo = useMemo(() => {
+    const map = new Map<string, { isFirst: boolean; isLast: boolean }>()
+    for (const [, moduleTasks] of grouped) {
+      moduleTasks.forEach((t, i) => {
+        map.set(t.id, { isFirst: i === 0, isLast: i === moduleTasks.length - 1 })
+      })
+    }
+    return map
+  }, [grouped])
 
   // --- drag-to-move / drag-to-resize -----------------------------------------
 
@@ -190,8 +204,67 @@ export function GanttChart({
   const todayX = xForIso(range, todayIso, dayWidth)
 
   return (
-    <div className="rounded-2xl border border-brand-line bg-white shadow-card">
-      <div ref={containerRef} className="relative overflow-x-auto">
+    <div className="flex overflow-hidden rounded-2xl border border-brand-line bg-white shadow-card">
+      {/* Activity list — fixed-width column that scrolls vertically with the
+          page but stays put horizontally, so it stays aligned row-for-row
+          with the timeline next to it regardless of horizontal scroll/zoom. */}
+      <div className="w-56 shrink-0 border-r border-brand-line">
+        <div
+          className="sticky top-0 z-10 flex items-end border-b border-brand-line bg-white px-2 pb-1.5 text-[11px] font-bold uppercase tracking-wide text-brand-slate"
+          style={{ height: HEADER_HEIGHT }}
+        >
+          Activities
+        </div>
+        <div className="relative" style={{ height: bodyHeight }}>
+          {visibleRows.map((row, i) =>
+            row.type === 'module' ? (
+              <button
+                key={row.key}
+                onClick={() => onToggleModule(row.key)}
+                className="absolute left-0 flex w-full items-center gap-1.5 border-b border-brand-line bg-slate-50 px-2 text-left text-xs font-bold"
+                style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT, color: moduleColor(row.label) }}
+              >
+                {row.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                <span className="truncate">
+                  {row.label} ({row.count})
+                </span>
+              </button>
+            ) : (
+              <div
+                key={row.key}
+                className="group absolute left-0 flex w-full items-center gap-1 border-b border-brand-line/60 px-2"
+                style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT }}
+              >
+                <span className="min-w-0 flex-1 truncate text-xs text-brand-ink" title={row.task.name}>
+                  {row.task.name}
+                </span>
+                {editable && (
+                  <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button
+                      onClick={() => onReorderTask(row.task.id, 'up')}
+                      disabled={taskOrderInfo.get(row.task.id)?.isFirst}
+                      title="Move up"
+                      className="rounded p-0.5 text-brand-slate hover:bg-slate-100 hover:text-brand-ink disabled:pointer-events-none disabled:opacity-30"
+                    >
+                      <ChevronUp size={13} />
+                    </button>
+                    <button
+                      onClick={() => onReorderTask(row.task.id, 'down')}
+                      disabled={taskOrderInfo.get(row.task.id)?.isLast}
+                      title="Move down"
+                      className="rounded p-0.5 text-brand-slate hover:bg-slate-100 hover:text-brand-ink disabled:pointer-events-none disabled:opacity-30"
+                    >
+                      <ChevronDown size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          )}
+        </div>
+      </div>
+
+      <div ref={containerRef} className="relative flex-1 overflow-x-auto">
         <div style={{ width: contentWidth, minWidth: '100%' }}>
           {/* Header */}
           <div className="sticky top-0 z-10 bg-white" style={{ height: HEADER_HEIGHT }}>
@@ -240,18 +313,14 @@ export function GanttChart({
             {/* today line */}
             <div className="absolute top-0 z-10 w-px bg-red-500" style={{ left: todayX, height: bodyHeight }} />
 
-            {/* row backgrounds + module bands */}
+            {/* row backgrounds + module bands (labels live in the activity list on the left) */}
             {visibleRows.map((row, i) =>
               row.type === 'module' ? (
-                <button
+                <div
                   key={row.key}
-                  onClick={() => onToggleModule(row.key)}
-                  className="absolute left-0 flex w-full items-center gap-1.5 border-b border-brand-line bg-slate-50 px-2 text-left text-xs font-bold"
-                  style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT, color: moduleColor(row.label) }}
-                >
-                  {row.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                  {row.label} ({row.count})
-                </button>
+                  className="absolute left-0 w-full border-b border-brand-line bg-slate-50"
+                  style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT }}
+                />
               ) : (
                 <div
                   key={row.key}

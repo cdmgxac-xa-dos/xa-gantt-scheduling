@@ -105,7 +105,7 @@ export function SchedulePage() {
     for (const name of moduleNames) {
       const group = byModule
         .get(name)!
-        .sort((a, b) => a.start_date.localeCompare(b.start_date) || a.sort_order - b.sort_order)
+        .sort((a, b) => a.sort_order - b.sort_order || a.start_date.localeCompare(b.start_date))
       result.push(...group)
     }
     return result
@@ -150,6 +150,35 @@ export function SchedulePage() {
       ])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save the new dates')
+      await refresh()
+    }
+  }
+
+  async function handleReorderTask(taskId: string, direction: 'up' | 'down') {
+    const task = tasks.find((t) => t.id === taskId)
+    if (!task) return
+    const moduleKey = task.module || null
+    const siblings = tasks
+      .filter((t) => (t.module || null) === moduleKey)
+      .sort((a, b) => a.sort_order - b.sort_order || a.start_date.localeCompare(b.start_date) || a.id.localeCompare(b.id))
+    const idx = siblings.findIndex((t) => t.id === taskId)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (idx === -1 || swapIdx < 0 || swapIdx >= siblings.length) return
+
+    // Renumber the whole sibling group sequentially, then swap the two
+    // positions — a plain value-swap would no-op whenever both tasks still
+    // share the default sort_order of 0 (true for every task until the
+    // first reorder), so this guarantees a real, persisted order change.
+    const reordered = [...siblings]
+    ;[reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]]
+    const updates = reordered.map((t, i) => ({ id: t.id, sort_order: i }))
+
+    const byId = new Map(updates.map((u) => [u.id, u.sort_order]))
+    setTasks((prev) => prev.map((t) => (byId.has(t.id) ? { ...t, sort_order: byId.get(t.id)! } : t)))
+    try {
+      await Promise.all(updates.map((u) => updateTask(u.id, { sort_order: u.sort_order })))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to reorder tasks')
       await refresh()
     }
   }
@@ -455,6 +484,7 @@ export function SchedulePage() {
           onToggleModule={toggleModule}
           onTaskDatesChange={handleTaskDatesChange}
           onLinkTasks={handleLinkTasks}
+          onReorderTask={handleReorderTask}
           onSelectTask={(taskId) => {
             if (!editable) return
             const task = tasks.find((t) => t.id === taskId)
@@ -467,7 +497,8 @@ export function SchedulePage() {
       {editable && (
         <p className="text-xs text-brand-slate">
           Drag a bar to reschedule it, drag its edges to change duration, or drag from the small dot on its right edge onto
-          another task to link them — dependent tasks push forward automatically. Click a bar to edit its details.
+          another task to link them — dependent tasks push forward automatically. Click a bar to edit its details. Hover a
+          row in the Activities list to reveal up/down arrows for reordering — the bar chart follows the new sequence.
         </p>
       )}
 
