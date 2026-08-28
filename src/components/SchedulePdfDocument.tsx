@@ -1,6 +1,21 @@
-import { Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer'
-import type { ScheduleTask } from '@/types'
+import { Document, Page, View, Text, StyleSheet, Svg, Path, Polygon } from '@react-pdf/renderer'
+import type { ScheduleDependency, ScheduleTask } from '@/types'
 import { diffDays, durationDays } from '@/lib/scheduleEngine'
+import { buildDayCells, buildMonthGroups, type DayCell } from '@/components/gantt/ganttGeometry'
+
+// A4 landscape is 841.89 x 595.28pt; content width after the page's 28pt
+// horizontal padding on each side. Fixed because dependency lines need real
+// pt coordinates (SVG path data isn't percentage-based like View widths),
+// and this document is always rendered at this page size.
+const PAGE_CONTENT_WIDTH_PT = 841.89 - 28 * 2
+const CHART_NAME_COL_WIDTH_PT = PAGE_CONTENT_WIDTH_PT * 0.22
+const CHART_COL_WIDTH_PT = PAGE_CONTENT_WIDTH_PT * 0.78
+// Chart-page rows get an explicit height (rather than the content-driven
+// auto height Page 1's rows use) so every row's vertical position is known
+// in advance — required to draw dependency lines, which need to reach an
+// exact y for a task that may be several modules down the page.
+const CHART_ROW_HEIGHT = 24
+const MODULE_TITLE_BLOCK_HEIGHT = 26
 
 const styles = StyleSheet.create({
   page: {
@@ -11,6 +26,10 @@ const styles = StyleSheet.create({
     fontFamily: 'Helvetica',
     color: '#0F172A',
   },
+  // Page 2 reserves extra top space for the fixed title + date-axis block
+  // (see chartPageHeader below) that repeats below the report header on
+  // every page the chart spills onto.
+  pageWithAxis: { paddingTop: 134 },
   header: {
     position: 'absolute',
     top: 0,
@@ -45,6 +64,9 @@ const styles = StyleSheet.create({
   table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 4, overflow: 'hidden' },
   tHeadRow: { flexDirection: 'row', backgroundColor: '#F1F5F9' },
   tRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center' },
+  // Same as tRow, but a fixed height instead of content-driven — see
+  // CHART_ROW_HEIGHT above for why the chart page's rows need one.
+  chartRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center', height: CHART_ROW_HEIGHT },
   th: { fontSize: 7, fontFamily: 'Helvetica-Bold', color: '#475569', padding: 4, textTransform: 'uppercase' },
   td: { fontSize: 7.5, padding: 4, color: '#0F172A' },
   colNameText: { width: '32%' },
@@ -55,6 +77,41 @@ const styles = StyleSheet.create({
   colNameChart: { width: '22%' },
   colBarChart: { width: '78%', paddingVertical: 6 },
   critical: { color: '#DC2626', fontFamily: 'Helvetica-Bold' },
+  // Fixed, page-repeating title + date axis for the chart page — title on
+  // top, axis below it, so it reads as one continuous picture rather than a
+  // header repeated per module (top: 56 sits right below the fixed report
+  // header, which occupies the same 56pt the page style reserves via
+  // paddingTop).
+  chartPageHeader: {
+    position: 'absolute',
+    top: 56,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 28,
+    paddingTop: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  // The "Activity" label and the month/date columns are siblings in one row
+  // so they start at the same top edge, instead of "Activity" trailing
+  // behind a taller two-row axis block.
+  axisRow: { flexDirection: 'row', marginTop: 8, borderBottomWidth: 1, borderBottomColor: '#CBD5E1' },
+  axisNameCol: { width: '22%' },
+  axisNameLabel: { fontSize: 7, fontFamily: 'Helvetica-Bold', color: '#475569', textTransform: 'uppercase' },
+  axisChartCol: { width: '78%' },
+  axisMonthRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
+  axisMonthCell: {
+    fontSize: 7,
+    fontFamily: 'Helvetica-Bold',
+    color: '#0F172A',
+    textTransform: 'uppercase',
+    paddingVertical: 2,
+    paddingLeft: 2,
+    borderLeftWidth: 1,
+    borderLeftColor: '#E2E8F0',
+  },
+  axisTickRow: { flexDirection: 'row' },
+  axisTickCell: { fontSize: 6.5, color: '#64748B', textAlign: 'center', paddingTop: 1, paddingBottom: 2 },
+  chartLegend: { fontSize: 7.5, fontStyle: 'italic', color: '#64748B', marginBottom: 6 },
   barTrack: { height: 10, position: 'relative' },
   barFill: { position: 'absolute', top: 0, height: 10, borderRadius: 2, borderWidth: 0.5, borderColor: '#0E7C86' },
   barProgress: { position: 'absolute', top: 0, left: 0, height: 10, borderRadius: 2, backgroundColor: '#0E7C86' },
@@ -83,6 +140,91 @@ const styles = StyleSheet.create({
 
 function pct(numerator: number, denominator: number): number {
   return denominator > 0 ? Math.max(0, Math.min(100, (numerator / denominator) * 100)) : 0
+}
+
+// This react-pdf version has no numberOfLines/line-clamp support, so a long
+// task name would otherwise wrap to 2+ lines and grow that row taller than
+// CHART_ROW_HEIGHT — breaking the fixed-height assumption DependencyLines
+// relies on to know every row's y in advance. 36 chars is a conservative fit
+// for the ~22%-wide name column at this font size even with wide characters.
+function truncateForChartRow(name: string): string {
+  const maxChars = 36
+  return name.length > maxChars ? `${name.slice(0, maxChars - 1).trimEnd()}…` : name
+}
+
+// The PDF page has a fixed, non-scrolling width, so — unlike the web chart's
+// day/week/month zoom picker — the whole project's day range must always fit
+// across it at once. These thresholds pick a tick density that stays legible
+// at that fixed width: below ~40 days there's room to label every day; up to
+// ~120 days only Mondays are labeled to avoid the numbers overlapping; past
+// that, day-level ticks would be illegibly cramped even at weekly spacing, so
+// the axis switches to labeling each week-of-month (1-5) instead.
+const AXIS_MONTH_TIER_MIN_DAYS = 120
+const AXIS_DAILY_TICKS_MAX_DAYS = 40
+
+function shouldLabelDay(cell: DayCell, totalDays: number): boolean {
+  return totalDays <= AXIS_DAILY_TICKS_MAX_DAYS || cell.weekday === 1
+}
+
+/** Groups day cells into week-of-month bands (e.g. "1", "2", "3"...), resetting at each month boundary. */
+function buildWeekOfMonthGroups(cells: DayCell[]): { label: string; startIndex: number; span: number }[] {
+  const groups: { key: string; label: string; startIndex: number; span: number }[] = []
+  for (const cell of cells) {
+    const weekOfMonth = Math.ceil(cell.dayOfMonth / 7)
+    const key = `${cell.iso.slice(0, 7)}-${weekOfMonth}`
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.span++
+    else groups.push({ key, label: String(weekOfMonth), startIndex: cell.index, span: 1 })
+  }
+  return groups
+}
+
+/** The chart page's single, page-repeating title + date axis — project name
+ *  first, then a month band with, below it, either day/Monday ticks or
+ *  week-of-month numbers (chosen by project length so the whole range always
+ *  fits legibly across the fixed page width), with the "Activity" label
+ *  sitting beside the axis rather than trailing behind them. */
+function ChartPageHeader({ projectName, rangeStart, totalDays }: { projectName: string; rangeStart: string; totalDays: number }) {
+  const cells = buildDayCells({ startIso: rangeStart, totalDays })
+  const monthGroups = buildMonthGroups(cells)
+  const useWeekNumbers = totalDays > AXIS_MONTH_TIER_MIN_DAYS
+  const weekOfMonthGroups = useWeekNumbers ? buildWeekOfMonthGroups(cells) : []
+
+  return (
+    <View style={styles.chartPageHeader} fixed>
+      <Text style={styles.pageKicker}>Gantt Timeline</Text>
+      <Text style={styles.projectName}>{projectName}</Text>
+      <Text style={styles.chartLegend}>Milestones shown as diamonds · red = critical path</Text>
+
+      <View style={styles.axisRow}>
+        <View style={styles.axisNameCol}>
+          <Text style={styles.axisNameLabel}>Activity</Text>
+        </View>
+        <View style={styles.axisChartCol}>
+          <View style={styles.axisMonthRow}>
+            {monthGroups.map((g) => (
+              <Text key={`${g.label}-${g.startIndex}`} style={[styles.axisMonthCell, { width: `${pct(g.span, totalDays)}%` }]}>
+                {g.label}
+              </Text>
+            ))}
+          </View>
+          <View style={styles.axisTickRow}>
+            {useWeekNumbers
+              ? weekOfMonthGroups.map((g) => (
+                  <Text key={`${g.label}-${g.startIndex}`} style={[styles.axisTickCell, { width: `${pct(g.span, totalDays)}%` }]}>
+                    {g.label}
+                  </Text>
+                ))
+              : cells.map((c) => (
+                  <Text key={c.iso} style={[styles.axisTickCell, { width: `${pct(1, totalDays)}%` }]}>
+                    {shouldLabelDay(c, totalDays) ? c.dayOfMonth : ''}
+                  </Text>
+                ))}
+          </View>
+        </View>
+      </View>
+    </View>
+  )
 }
 
 function ReportHeader({ generatedDate }: { generatedDate: string }) {
@@ -178,8 +320,8 @@ function ChartRow({
   const barColor = isCritical ? '#DC2626' : '#0E7C86'
 
   return (
-    <View style={styles.tRow}>
-      <Text style={[styles.td, styles.colNameChart]}>{task.name}</Text>
+    <View style={styles.chartRow}>
+      <Text style={[styles.td, styles.colNameChart]}>{truncateForChartRow(task.name)}</Text>
       <View style={[styles.td, styles.colBarChart]}>
         <View style={styles.barTrack}>
           {task.is_milestone ? (
@@ -215,6 +357,80 @@ function ChartRow({
   )
 }
 
+/** Predecessor→successor connector lines over the chart's bars — the same
+ *  elbow-with-arrowhead the web Gantt draws for dependency links. Every row's
+ *  y is known in advance (module title + fixed-height rows, both constants
+ *  above), which is what makes drawing a line across module boundaries
+ *  possible without access to the PDF renderer's own layout pass. Confined
+ *  to whichever page this renders on — a link into a task pushed onto a
+ *  later page (an overflowing report) won't be connected, a fixed-page-size
+ *  limitation with no photo-realistic alternative in a printed report. */
+function DependencyLines({
+  moduleGroups,
+  dependencies,
+  rangeStart,
+  totalDays,
+}: {
+  moduleGroups: { module: string; tasks: ScheduleTask[] }[]
+  dependencies: ScheduleDependency[]
+  rangeStart: string
+  totalDays: number
+}) {
+  const yById = new Map<string, number>()
+  const taskById = new Map<string, ScheduleTask>()
+  let cursorY = 0
+  for (const group of moduleGroups) {
+    cursorY += MODULE_TITLE_BLOCK_HEIGHT + 1 // title block + table's top border
+    for (const task of group.tasks) {
+      taskById.set(task.id, task)
+      yById.set(task.id, cursorY + CHART_ROW_HEIGHT / 2)
+      cursorY += CHART_ROW_HEIGHT
+    }
+    cursorY += 1 // table's bottom border
+  }
+  const totalHeight = cursorY
+
+  const links = dependencies
+    .map((dep) => {
+      const predTask = taskById.get(dep.predecessor_id)
+      const succTask = taskById.get(dep.successor_id)
+      const y1 = yById.get(dep.predecessor_id)
+      const y2 = yById.get(dep.successor_id)
+      if (!predTask || !succTask || y1 === undefined || y2 === undefined) return null
+      const x1 = (pct(diffDays(rangeStart, predTask.end_date) + 1, totalDays) / 100) * CHART_COL_WIDTH_PT
+      const x2 = (pct(diffDays(rangeStart, succTask.start_date), totalDays) / 100) * CHART_COL_WIDTH_PT
+      const midX = x1 + 10
+      return { id: dep.id, x1, y1, midX, x2, y2 }
+    })
+    .filter((l): l is NonNullable<typeof l> => l !== null)
+
+  if (links.length === 0) return null
+
+  return (
+    <Svg
+      style={{ position: 'absolute', top: 134, left: 28 + CHART_NAME_COL_WIDTH_PT, width: CHART_COL_WIDTH_PT, height: totalHeight }}
+      viewBox={`0 0 ${CHART_COL_WIDTH_PT} ${totalHeight}`}
+    >
+      {links.map((l) => (
+        <Path
+          key={l.id}
+          d={`M${l.x1},${l.y1} L${l.midX},${l.y1} L${l.midX},${l.y2} L${l.x2},${l.y2}`}
+          stroke="#94A3B8"
+          strokeWidth={1}
+          fill="none"
+        />
+      ))}
+      {links.map((l) => (
+        <Polygon
+          key={`${l.id}-arrow`}
+          points={`${l.x2},${l.y2} ${l.x2 - 6},${l.y2 - 3} ${l.x2 - 6},${l.y2 + 3}`}
+          fill="#94A3B8"
+        />
+      ))}
+    </Svg>
+  )
+}
+
 export function SchedulePdfDocument({
   generatedDate,
   projectName,
@@ -225,6 +441,7 @@ export function SchedulePdfDocument({
   approvedByName,
   approvedByTitle,
   moduleGroups,
+  dependencies,
   rangeStart,
   totalDays,
   criticalIds,
@@ -241,6 +458,7 @@ export function SchedulePdfDocument({
   approvedByName: string | null
   approvedByTitle: string | null
   moduleGroups: { module: string; tasks: ScheduleTask[] }[]
+  dependencies: ScheduleDependency[]
   rangeStart: string
   totalDays: number
   criticalIds: Set<string>
@@ -314,15 +532,15 @@ export function SchedulePdfDocument({
       </Page>
 
       {/* Page 2 — the Gantt bar chart, given the full page width now that it
-          isn't squeezed next to five other columns. */}
-      <Page size="A4" orientation="landscape" style={styles.page}>
+          isn't squeezed next to five other columns. A single date axis spans
+          the whole page (and repeats on every continuation page) instead of
+          each module repeating its own "Task | Timeline" header, so the
+          chart reads as one continuous picture with the start and finish
+          dates always visible at a glance. */}
+      <Page size="A4" orientation="landscape" style={[styles.page, styles.pageWithAxis]}>
         <ReportHeader generatedDate={generatedDate} />
         <ReportFooter />
-
-        <View style={styles.projectBlock}>
-          <Text style={styles.pageKicker}>Gantt Timeline</Text>
-          <Text style={styles.projectName}>{projectName}</Text>
-        </View>
+        <ChartPageHeader projectName={projectName} rangeStart={rangeStart} totalDays={totalDays} />
 
         {moduleGroups.map((group) => (
           <View key={group.module} wrap={false}>
@@ -330,10 +548,6 @@ export function SchedulePdfDocument({
               {group.module} ({group.tasks.length})
             </Text>
             <View style={styles.table}>
-              <View style={styles.tHeadRow}>
-                <Text style={[styles.th, styles.colNameChart]}>Task</Text>
-                <Text style={[styles.th, styles.colBarChart]}>Timeline (milestones marked, red = critical path)</Text>
-              </View>
               {group.tasks.map((task) => (
                 <ChartRow
                   key={task.id}
@@ -346,6 +560,8 @@ export function SchedulePdfDocument({
             </View>
           </View>
         ))}
+
+        <DependencyLines moduleGroups={moduleGroups} dependencies={dependencies} rangeStart={rangeStart} totalDays={totalDays} />
 
         <SignatureBlocks
           preparedByName={preparedByName}

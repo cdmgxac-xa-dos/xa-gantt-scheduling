@@ -291,6 +291,7 @@ export function SchedulePage() {
         approvedByName={projectInfo.approved_by_name}
         approvedByTitle={projectInfo.approved_by_title}
         moduleGroups={moduleGroups}
+        dependencies={dependencies}
         rangeStart={range.startIso}
         totalDays={range.totalDays}
         criticalIds={criticalIds}
