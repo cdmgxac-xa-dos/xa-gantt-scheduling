@@ -9,6 +9,7 @@ import {
   Trash2,
   X,
   FileText,
+  FileSpreadsheet,
   ChevronDown,
   ChevronUp,
   Info,
@@ -69,7 +70,7 @@ export function SchedulePage() {
   const [collapsedModules, setCollapsedModules] = useState<Set<string>>(new Set())
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; task?: ScheduleTask } | null>(null)
   const [showProjectInfoModal, setShowProjectInfoModal] = useState(false)
-  const [exporting, setExporting] = useState<'download' | 'save' | null>(null)
+  const [exporting, setExporting] = useState<'download' | 'save' | 'excel' | null>(null)
   const [showReports, setShowReports] = useState(false)
   const [busyAction, setBusyAction] = useState(false)
 
@@ -263,20 +264,33 @@ export function SchedulePage() {
     }
   }
 
-  // --- PDF export ---------------------------------------------------------------
+  // --- PDF / Excel export --------------------------------------------------------
 
-  async function buildPdfBlob() {
-    const [{ pdf }, { SchedulePdfDocument }] = await Promise.all([
-      import('@react-pdf/renderer'),
-      import('@/components/SchedulePdfDocument'),
-    ])
+  function buildModuleGroups() {
     const byModule = new Map<string, ScheduleTask[]>()
     for (const t of displayTasks) {
       const key = t.module || 'Ungrouped'
       if (!byModule.has(key)) byModule.set(key, [])
       byModule.get(key)!.push(t)
     }
-    const moduleGroups = Array.from(byModule.entries()).map(([module, groupTasks]) => ({ module, tasks: groupTasks }))
+    return Array.from(byModule.entries()).map(([module, groupTasks]) => ({ module, tasks: groupTasks }))
+  }
+
+  function downloadBlob(blob: Blob, fileName: string) {
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function buildPdfBlob() {
+    const [{ pdf }, { SchedulePdfDocument }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/components/SchedulePdfDocument'),
+    ])
+    const moduleGroups = buildModuleGroups()
     const range = computeTimelineRange(tasks, todayIso())
     const generatedDate = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
 
@@ -334,6 +348,33 @@ export function SchedulePage() {
       setShowReports(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save PDF to the project')
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  async function handleExportExcel() {
+    setExporting('excel')
+    try {
+      const { buildScheduleWorkbookBlob } = await import('@/lib/scheduleExcelExport')
+      const moduleGroups = buildModuleGroups()
+      const range = computeTimelineRange(tasks, todayIso())
+      const generatedDate = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+
+      const blob = await buildScheduleWorkbookBlob({
+        projectName: projectInfo.project_name || APP_TITLE,
+        projectLocation: projectInfo.project_location,
+        scopeOfWork: projectInfo.scope_of_work,
+        generatedDate,
+        moduleGroups,
+        dependencies,
+        criticalIds,
+        rangeStart: range.startIso,
+        totalDays: range.totalDays,
+      })
+      downloadBlob(blob, `Project-Schedule-${todayIso()}.xlsx`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to export Excel file')
     } finally {
       setExporting(null)
     }
@@ -442,6 +483,13 @@ export function SchedulePage() {
             onClick={handlePreviewPdf}
             disabled={exporting !== null}
             loading={exporting === 'download'}
+          />
+          <ToolbarButton
+            icon={FileSpreadsheet}
+            label="Export Excel"
+            onClick={handleExportExcel}
+            disabled={exporting !== null}
+            loading={exporting === 'excel'}
           />
           {editable && (
             <ToolbarButton
