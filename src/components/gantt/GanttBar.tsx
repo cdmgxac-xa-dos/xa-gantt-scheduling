@@ -25,6 +25,7 @@ export function GanttBar({
   onClick: () => void
 }) {
   const baseColor = isCritical ? '#DC2626' : task.color || moduleColor(task.module)
+  const codePrefix = task.activity_code ? `${task.activity_code} — ` : ''
 
   if (task.is_milestone) {
     const size = 16
@@ -36,7 +37,7 @@ export function GanttBar({
         <div
           onMouseDown={editable ? onMoveStart : undefined}
           onClick={onClick}
-          title={`${task.name} — ${task.start_date}`}
+          title={`${codePrefix}${task.name} — ${task.start_date}`}
           className="h-full w-full rotate-45 border-2 border-white shadow"
           style={{ backgroundColor: baseColor, cursor: editable ? 'grab' : 'pointer' }}
         />
@@ -54,7 +55,7 @@ export function GanttBar({
       <div
         onMouseDown={editable ? onMoveStart : undefined}
         onClick={onClick}
-        title={`${task.name}\n${task.start_date} → ${task.end_date} · ${task.percent_complete}% complete${isCritical ? ' · Critical path' : ''}`}
+        title={`${codePrefix}${task.name}\n${task.start_date} → ${task.end_date} · ${task.percent_complete}% complete${isCritical ? ' · Critical path' : ''}`}
         className="relative h-full w-full overflow-hidden rounded-md border shadow-sm"
         style={{
           backgroundColor: `${baseColor}33`,

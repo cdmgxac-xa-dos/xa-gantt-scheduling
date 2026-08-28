@@ -4,7 +4,7 @@
 // write back to Supabase after a drag/resize/edit.
 // ---------------------------------------------------------------------------
 
-import type { DependencyType, ScheduleDependency, ScheduleTask } from '@/types'
+import type { ActivityStatus, DependencyType, ScheduleDependency, ScheduleHealth, ScheduleTask, WorkCalendarDays } from '@/types'
 
 export interface DateWindow {
   start_date: string
@@ -46,6 +46,113 @@ export function clampPercent(n: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// Work calendar — 5/6/7-day week. Only affects dependency-driven date math
+// (cascade rescheduling below): a task's own start/end are still whatever
+// the user picked, calendar or not. `days` in lag_days is "working days" per
+// the project's calendar, not raw calendar days.
+// ---------------------------------------------------------------------------
+
+function weekdayOf(iso: string): number {
+  return new Date(parseIso(iso)).getUTCDay() // 0 = Sunday .. 6 = Saturday
+}
+
+export function isWorkDay(iso: string, calendarDays: WorkCalendarDays): boolean {
+  if (calendarDays === 7) return true
+  const wd = weekdayOf(iso)
+  if (calendarDays === 6) return wd !== 0 // Mon–Sat
+  return wd >= 1 && wd <= 5 // Mon–Fri
+}
+
+/** Nearest date on/after `iso` that's a work day under the given calendar. */
+export function rollForwardToWorkDay(iso: string, calendarDays: WorkCalendarDays): string {
+  let result = iso
+  while (!isWorkDay(result, calendarDays)) result = addDays(result, 1)
+  return result
+}
+
+/** Shifts `iso` by `days` *working* days (can be negative), skipping non-work days under the calendar. */
+export function addWorkDays(iso: string, days: number, calendarDays: WorkCalendarDays): string {
+  if (calendarDays === 7 || days === 0) return addDays(iso, days)
+  let result = iso
+  const step = days > 0 ? 1 : -1
+  let remaining = Math.abs(days)
+  while (remaining > 0) {
+    result = addDays(result, step)
+    if (isWorkDay(result, calendarDays)) remaining--
+  }
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// Human-readable Activity ID (A100, A110, ... / M100, M110, ... for
+// milestones) — next-in-sequence per project, numbered in tens the way MS
+// Project / Primavera schedules conventionally are so there's room to insert
+// activities later without renumbering everything.
+// ---------------------------------------------------------------------------
+
+export function nextActivityCode(tasks: ScheduleTask[], isMilestone: boolean): string {
+  const prefix = isMilestone ? 'M' : 'A'
+  let maxSeq = 90
+  for (const t of tasks) {
+    if (!t.activity_code) continue
+    const m = /^([AM])(\d+)$/.exec(t.activity_code)
+    if (m && m[1] === prefix) maxSeq = Math.max(maxSeq, Number(m[2]))
+  }
+  return `${prefix}${maxSeq + 10}`
+}
+
+// ---------------------------------------------------------------------------
+// Status, variance, forecast, schedule health — all derived, nothing stored.
+// ---------------------------------------------------------------------------
+
+/** Per spec: Completed (actual finish or 100%) > In Progress/Delayed (actual start or >0%) > Not Started. */
+export function deriveStatus(task: ScheduleTask, todayIso: string): ActivityStatus {
+  if (task.actual_finish || task.percent_complete >= 100) return 'Completed'
+  if (task.actual_start || task.percent_complete > 0) {
+    return task.end_date < todayIso ? 'Delayed' : 'In Progress'
+  }
+  return task.start_date < todayIso ? 'Delayed' : 'Not Started'
+}
+
+/** Current finish vs. baseline finish, in days. Positive = delayed, negative = ahead, null = no baseline set. */
+export function taskBaselineVarianceDays(task: ScheduleTask): number | null {
+  if (!task.baseline_end) return null
+  return diffDays(task.baseline_end, task.end_date)
+}
+
+/** The project's forecast finish — the latest current finish among its tasks. */
+export function computeForecastFinish(tasks: ScheduleTask[]): string | null {
+  if (tasks.length === 0) return null
+  return tasks.reduce((max, t) => (t.end_date > max ? t.end_date : max), tasks[0].end_date)
+}
+
+/** Forecast finish vs. target completion, in days. Positive = late, negative = ahead of target. */
+export function computeTargetVarianceDays(forecastFinish: string | null, targetCompletion: string | null): number | null {
+  if (!forecastFinish || !targetCompletion) return null
+  return diffDays(targetCompletion, forecastFinish)
+}
+
+/**
+ * On Track: forecast is on/ahead of target and no delayed critical work.
+ * Watch: something's delayed but forecast still meets target.
+ * At Risk: forecast has slipped past target, or a critical-path task is delayed.
+ */
+export function computeScheduleHealth(
+  tasks: ScheduleTask[],
+  criticalIds: Set<string>,
+  forecastFinish: string | null,
+  targetCompletion: string | null,
+  todayIso: string
+): ScheduleHealth {
+  const varianceDays = computeTargetVarianceDays(forecastFinish, targetCompletion)
+  const delayed = tasks.filter((t) => deriveStatus(t, todayIso) === 'Delayed')
+  const criticalDelayed = delayed.filter((t) => criticalIds.has(t.id))
+  if ((varianceDays !== null && varianceDays > 0) || criticalDelayed.length > 0) return 'at_risk'
+  if (delayed.length > 0) return 'watch'
+  return 'on_track'
+}
+
+// ---------------------------------------------------------------------------
 // Cycle detection — checked before a new dependency is written
 // ---------------------------------------------------------------------------
 
@@ -83,30 +190,49 @@ export function wouldCreateCycle(
 // move.
 // ---------------------------------------------------------------------------
 
-function minSuccessorStart(depType: DependencyType, lag: number, predWindow: DateWindow): string | null {
+function minSuccessorStart(
+  depType: DependencyType,
+  lag: number,
+  predWindow: DateWindow,
+  calendarDays: WorkCalendarDays
+): string | null {
   switch (depType) {
-    case 'FS':
-      return addDays(predWindow.end_date, 1 + lag)
-    case 'SS':
-      return addDays(predWindow.start_date, lag)
+    case 'FS': {
+      const base = rollForwardToWorkDay(addDays(predWindow.end_date, 1), calendarDays)
+      return addWorkDays(base, lag, calendarDays)
+    }
+    case 'SS': {
+      const base = rollForwardToWorkDay(predWindow.start_date, calendarDays)
+      return addWorkDays(base, lag, calendarDays)
+    }
     case 'FF':
       return null
   }
 }
 
-function minSuccessorEnd(depType: DependencyType, lag: number, predWindow: DateWindow): string | null {
-  return depType === 'FF' ? addDays(predWindow.end_date, lag) : null
+function minSuccessorEnd(
+  depType: DependencyType,
+  lag: number,
+  predWindow: DateWindow,
+  calendarDays: WorkCalendarDays
+): string | null {
+  if (depType !== 'FF') return null
+  const base = rollForwardToWorkDay(predWindow.end_date, calendarDays)
+  return addWorkDays(base, lag, calendarDays)
 }
 
 /**
  * Given the task list with `updatedTaskIds` already holding their new
  * start/end dates, walks the dependency graph forward and returns every
  * *other* task whose dates had to shift to keep dependencies satisfied.
+ * `calendarDays` is the project's work calendar (5/6/7-day week) — lag is
+ * interpreted in working days under it.
  */
 export function cascadeReschedule(
   tasks: ScheduleTask[],
   dependencies: ScheduleDependency[],
-  updatedTaskIds: string[]
+  updatedTaskIds: string[],
+  calendarDays: WorkCalendarDays = 6
 ): Map<string, DateWindow> {
   const windows = new Map<string, DateWindow>()
   for (const t of tasks) windows.set(t.id, { start_date: t.start_date, end_date: t.end_date })
@@ -134,8 +260,8 @@ export function cascadeReschedule(
       if (!succWindow) continue
       const duration = durationDays(succWindow)
 
-      const minStart = minSuccessorStart(dep.dep_type, dep.lag_days, predWindow)
-      const minEnd = minSuccessorEnd(dep.dep_type, dep.lag_days, predWindow)
+      const minStart = minSuccessorStart(dep.dep_type, dep.lag_days, predWindow, calendarDays)
+      const minEnd = minSuccessorEnd(dep.dep_type, dep.lag_days, predWindow, calendarDays)
 
       let nextWindow: DateWindow | null = null
       if (minStart && minStart > succWindow.start_date) {

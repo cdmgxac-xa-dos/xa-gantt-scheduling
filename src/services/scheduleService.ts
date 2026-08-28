@@ -1,48 +1,69 @@
 import { requireSupabase } from '@/lib/supabaseClient'
-import type { DependencyType, ProjectInfo, ScheduleDependency, ScheduleReport, ScheduleTask } from '@/types'
+import type { DependencyType, NewProjectInput, Project, ScheduleDependency, ScheduleReport, ScheduleTask } from '@/types'
 
 const REPORTS_BUCKET = 'gantt-reports'
 
-export async function getProjectInfo(): Promise<ProjectInfo> {
-  const { data, error } = await requireSupabase()
-    .from('gantt_project_info')
-    .select(
-      'project_name, project_location, scope_of_work, prepared_by_name, prepared_by_title, approved_by_name, approved_by_title'
-    )
-    .eq('id', true)
-    .single()
-  if (error) throw error
-  return data as ProjectInfo
+// Postgres unique_violation — see gantt_tasks_activity_code_unique in
+// supabase/05_v1_1_multiproject_and_controls.sql.
+const UNIQUE_VIOLATION = '23505'
+
+function rethrowFriendly(error: { code?: string; message: string }): never {
+  if (error.code === UNIQUE_VIOLATION) {
+    throw new Error('That Activity ID is already used in this project — pick a different one.')
+  }
+  throw error
 }
 
-export async function updateProjectInfo(fields: ProjectInfo): Promise<void> {
-  const { error } = await requireSupabase().from('gantt_project_info').update(fields).eq('id', true)
+// --- Projects -----------------------------------------------------------------
+
+export async function listProjects(): Promise<Project[]> {
+  const { data, error } = await requireSupabase().from('gantt_projects').select('*').order('created_at', { ascending: true })
   if (error) throw error
+  return data as Project[]
 }
 
-export async function listTasks(): Promise<ScheduleTask[]> {
+export async function createProject(input: NewProjectInput): Promise<Project> {
+  const { data, error } = await requireSupabase().from('gantt_projects').insert(input).select('*').single()
+  if (error) throw error
+  return data as Project
+}
+
+export async function updateProject(id: string, patch: Partial<Omit<Project, 'id' | 'created_at' | 'updated_at'>>): Promise<Project> {
+  const { data, error } = await requireSupabase().from('gantt_projects').update(patch).eq('id', id).select('*').single()
+  if (error) throw error
+  return data as Project
+}
+
+// --- Tasks / dependencies -------------------------------------------------------
+
+export async function listTasks(projectId: string): Promise<ScheduleTask[]> {
   const { data, error } = await requireSupabase()
     .from('gantt_tasks')
     .select('*')
+    .eq('project_id', projectId)
     .order('sort_order', { ascending: true })
     .order('start_date', { ascending: true })
   if (error) throw error
   return data as ScheduleTask[]
 }
 
-export async function listDependencies(): Promise<ScheduleDependency[]> {
-  const { data, error } = await requireSupabase().from('gantt_dependencies').select('*')
+export async function listDependencies(projectId: string): Promise<ScheduleDependency[]> {
+  const { data, error } = await requireSupabase().from('gantt_dependencies').select('*').eq('project_id', projectId)
   if (error) throw error
   return data as ScheduleDependency[]
 }
 
 export interface NewTaskInput {
+  project_id: string
+  activity_code?: string | null
   name: string
   module?: string | null
   start_date: string
   end_date: string
   is_milestone?: boolean
   percent_complete?: number
+  actual_start?: string | null
+  actual_finish?: string | null
   assignee?: string | null
   color?: string | null
   notes?: string | null
@@ -54,12 +75,16 @@ export async function createTask(payload: NewTaskInput): Promise<ScheduleTask> {
   const { data, error } = await requireSupabase()
     .from('gantt_tasks')
     .insert({
+      project_id: payload.project_id,
+      activity_code: payload.activity_code ?? null,
       name: payload.name,
       module: payload.module ?? null,
       start_date: payload.start_date,
       end_date: payload.end_date,
       is_milestone: payload.is_milestone ?? false,
       percent_complete: payload.percent_complete ?? 0,
+      actual_start: payload.actual_start ?? null,
+      actual_finish: payload.actual_finish ?? null,
       assignee: payload.assignee ?? null,
       color: payload.color ?? null,
       notes: payload.notes ?? null,
@@ -68,13 +93,14 @@ export async function createTask(payload: NewTaskInput): Promise<ScheduleTask> {
     })
     .select('*')
     .single()
-  if (error) throw error
+  if (error) rethrowFriendly(error)
   return data as ScheduleTask
 }
 
 export type TaskPatch = Partial<
   Pick<
     ScheduleTask,
+    | 'activity_code'
     | 'name'
     | 'module'
     | 'sort_order'
@@ -82,6 +108,8 @@ export type TaskPatch = Partial<
     | 'end_date'
     | 'is_milestone'
     | 'percent_complete'
+    | 'actual_start'
+    | 'actual_finish'
     | 'assignee'
     | 'color'
     | 'notes'
@@ -92,7 +120,7 @@ export type TaskPatch = Partial<
 
 export async function updateTask(id: string, patch: TaskPatch): Promise<ScheduleTask> {
   const { data, error } = await requireSupabase().from('gantt_tasks').update(patch).eq('id', id).select('*').single()
-  if (error) throw error
+  if (error) rethrowFriendly(error)
   return data as ScheduleTask
 }
 
@@ -114,6 +142,7 @@ export async function deleteTask(id: string): Promise<void> {
 }
 
 export async function createDependency(payload: {
+  project_id: string
   predecessor_id: string
   successor_id: string
   dep_type: DependencyType
@@ -122,6 +151,7 @@ export async function createDependency(payload: {
   const { data, error } = await requireSupabase()
     .from('gantt_dependencies')
     .insert({
+      project_id: payload.project_id,
       predecessor_id: payload.predecessor_id,
       successor_id: payload.successor_id,
       dep_type: payload.dep_type,
@@ -175,10 +205,11 @@ export async function clearBaselineForAll(tasks: ScheduleTask[]): Promise<void> 
 
 // --- Saved PDF reports -------------------------------------------------------
 
-export async function listReports(): Promise<ScheduleReport[]> {
+export async function listReports(projectId: string): Promise<ScheduleReport[]> {
   const { data, error } = await requireSupabase()
     .from('gantt_reports')
     .select('*, gantt_app_users(full_name)')
+    .eq('project_id', projectId)
     .order('generated_at', { ascending: false })
   if (error) throw error
   return (data as any[]).map((row) => {
@@ -192,7 +223,7 @@ function reportStoragePath(fileName: string): string {
   return `${Date.now()}-${safeName}`
 }
 
-export async function saveReport(blob: Blob, fileName: string, note?: string): Promise<ScheduleReport> {
+export async function saveReport(blob: Blob, fileName: string, projectId: string, note?: string): Promise<ScheduleReport> {
   const path = reportStoragePath(fileName)
   const client = requireSupabase()
 
@@ -208,7 +239,7 @@ export async function saveReport(blob: Blob, fileName: string, note?: string): P
 
   const { data, error } = await client
     .from('gantt_reports')
-    .insert({ storage_path: path, file_name: fileName, note: note ?? null, generated_by: user?.id ?? null })
+    .insert({ project_id: projectId, storage_path: path, file_name: fileName, note: note ?? null, generated_by: user?.id ?? null })
     .select('*')
     .single()
   if (error) throw error

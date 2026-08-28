@@ -1,6 +1,7 @@
 import { Document, Page, View, Text, StyleSheet, Svg, Path, Polygon } from '@react-pdf/renderer'
-import type { ScheduleDependency, ScheduleTask } from '@/types'
-import { diffDays, durationDays } from '@/lib/scheduleEngine'
+import type { ScheduleDependency, ScheduleHealth, ScheduleTask } from '@/types'
+import { SCHEDULE_HEALTH_LABELS } from '@/types'
+import { diffDays, durationDays, taskBaselineVarianceDays } from '@/lib/scheduleEngine'
 import { buildDayCells, buildMonthGroups, type DayCell } from '@/components/gantt/ganttGeometry'
 
 // A4 landscape is 841.89 x 595.28pt; content width after the page's 28pt
@@ -69,14 +70,17 @@ const styles = StyleSheet.create({
   chartRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center', height: CHART_ROW_HEIGHT },
   th: { fontSize: 7, fontFamily: 'Helvetica-Bold', color: '#475569', padding: 4, textTransform: 'uppercase' },
   td: { fontSize: 7.5, padding: 4, color: '#0F172A' },
-  colNameText: { width: '32%' },
-  colDate: { width: '14%' },
-  colDur: { width: '12%', textAlign: 'center' },
-  colPct: { width: '12%', textAlign: 'center' },
-  colCritical: { width: '16%', textAlign: 'center' },
+  colCode: { width: '8%' },
+  colNameText: { width: '24%' },
+  colDate: { width: '12%' },
+  colDur: { width: '9%', textAlign: 'center' },
+  colPct: { width: '9%', textAlign: 'center' },
+  colVariance: { width: '11%', textAlign: 'center' },
+  colCritical: { width: '12%', textAlign: 'center' },
   colNameChart: { width: '22%' },
-  colBarChart: { width: '78%', paddingVertical: 6 },
+  colBarChart: { width: '78%', paddingVertical: 5 },
   critical: { color: '#DC2626', fontFamily: 'Helvetica-Bold' },
+  delayedVariance: { color: '#DC2626', fontFamily: 'Helvetica-Bold' },
   // Fixed, page-repeating title + date axis for the chart page — title on
   // top, axis below it, so it reads as one continuous picture rather than a
   // header repeated per module (top: 56 sits right below the fixed report
@@ -112,7 +116,17 @@ const styles = StyleSheet.create({
   axisTickRow: { flexDirection: 'row' },
   axisTickCell: { fontSize: 6.5, color: '#64748B', textAlign: 'center', paddingTop: 1, paddingBottom: 2 },
   chartLegend: { fontSize: 7.5, fontStyle: 'italic', color: '#64748B', marginBottom: 6 },
+  legendRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 8 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  legendSwatch: { width: 9, height: 9, borderRadius: 2 },
+  legendDiamond: { width: 7, height: 7, transform: 'rotate(45deg)' },
+  legendLine: { width: 12, height: 0, borderTopWidth: 1.5 },
+  legendLabel: { fontSize: 7, color: '#334155' },
+  healthOnTrack: { color: '#059669', fontFamily: 'Helvetica-Bold' },
+  healthWatch: { color: '#D97706', fontFamily: 'Helvetica-Bold' },
+  healthAtRisk: { color: '#DC2626', fontFamily: 'Helvetica-Bold' },
   barTrack: { height: 10, position: 'relative' },
+  baselineBar: { position: 'absolute', top: 11, height: 2, borderRadius: 1, backgroundColor: '#CBD5E1' },
   barFill: { position: 'absolute', top: 0, height: 10, borderRadius: 2, borderWidth: 0.5, borderColor: '#0E7C86' },
   barProgress: { position: 'absolute', top: 0, left: 0, height: 10, borderRadius: 2, backgroundColor: '#0E7C86' },
   milestoneMarker: {
@@ -184,7 +198,54 @@ function buildWeekOfMonthGroups(cells: DayCell[]): { label: string; startIndex: 
  *  week-of-month numbers (chosen by project length so the whole range always
  *  fits legibly across the fixed page width), with the "Activity" label
  *  sitting beside the axis rather than trailing behind them. */
-function ChartPageHeader({ projectName, rangeStart, totalDays }: { projectName: string; rangeStart: string; totalDays: number }) {
+function ChartLegend({ hasBaseline, hasDataDate }: { hasBaseline: boolean; hasDataDate: boolean }) {
+  return (
+    <View style={styles.legendRow}>
+      <View style={styles.legendItem}>
+        <View style={[styles.legendSwatch, { backgroundColor: '#0E7C86' }]} />
+        <Text style={styles.legendLabel}>Current schedule</Text>
+      </View>
+      {hasBaseline && (
+        <View style={styles.legendItem}>
+          <View style={[styles.legendSwatch, { backgroundColor: '#CBD5E1' }]} />
+          <Text style={styles.legendLabel}>Baseline</Text>
+        </View>
+      )}
+      <View style={styles.legendItem}>
+        <View style={[styles.legendDiamond, { backgroundColor: '#0E7C86' }]} />
+        <Text style={styles.legendLabel}>Milestone</Text>
+      </View>
+      <View style={styles.legendItem}>
+        <View style={[styles.legendSwatch, { backgroundColor: '#DC2626' }]} />
+        <Text style={styles.legendLabel}>Critical path</Text>
+      </View>
+      <View style={styles.legendItem}>
+        <View style={[styles.legendSwatch, { backgroundColor: '#0E7C86', opacity: 0.4 }]} />
+        <Text style={styles.legendLabel}>Progress</Text>
+      </View>
+      {hasDataDate && (
+        <View style={styles.legendItem}>
+          <View style={[styles.legendLine, { borderTopColor: '#2563EB', borderStyle: 'dashed' }]} />
+          <Text style={styles.legendLabel}>Data Date</Text>
+        </View>
+      )}
+    </View>
+  )
+}
+
+function ChartPageHeader({
+  projectName,
+  rangeStart,
+  totalDays,
+  hasBaseline,
+  hasDataDate,
+}: {
+  projectName: string
+  rangeStart: string
+  totalDays: number
+  hasBaseline: boolean
+  hasDataDate: boolean
+}) {
   const cells = buildDayCells({ startIso: rangeStart, totalDays })
   const monthGroups = buildMonthGroups(cells)
   const useWeekNumbers = totalDays > AXIS_MONTH_TIER_MIN_DAYS
@@ -194,7 +255,7 @@ function ChartPageHeader({ projectName, rangeStart, totalDays }: { projectName: 
     <View style={styles.chartPageHeader} fixed>
       <Text style={styles.pageKicker}>Gantt Timeline</Text>
       <Text style={styles.projectName}>{projectName}</Text>
-      <Text style={styles.chartLegend}>Milestones shown as diamonds · red = critical path</Text>
+      <ChartLegend hasBaseline={hasBaseline} hasDataDate={hasDataDate} />
 
       <View style={styles.axisRow}>
         <View style={styles.axisNameCol}>
@@ -286,15 +347,26 @@ function SignatureBlocks({
   )
 }
 
+function formatVariance(days: number | null): string {
+  if (days === null) return '—'
+  if (days === 0) return 'On Plan'
+  return days > 0 ? `+${days}d` : `${days}d`
+}
+
 function TextRow({ task, isCritical }: { task: ScheduleTask; isCritical: boolean }) {
   const duration = durationDays(task)
+  const variance = taskBaselineVarianceDays(task)
   return (
     <View style={styles.tRow}>
+      <Text style={[styles.td, styles.colCode]}>{task.activity_code ?? ''}</Text>
       <Text style={[styles.td, styles.colNameText]}>{task.name}</Text>
       <Text style={[styles.td, styles.colDate]}>{task.start_date}</Text>
       <Text style={[styles.td, styles.colDate]}>{task.end_date}</Text>
       <Text style={[styles.td, styles.colDur]}>{task.is_milestone ? '—' : `${duration}d`}</Text>
       <Text style={[styles.td, styles.colPct]}>{task.percent_complete}%</Text>
+      <Text style={[styles.td, styles.colVariance, variance !== null && variance > 0 ? styles.delayedVariance : undefined]}>
+        {formatVariance(variance)}
+      </Text>
       <Text style={[styles.td, styles.colCritical, isCritical ? styles.critical : undefined]}>
         {isCritical ? 'Critical' : ''}
       </Text>
@@ -319,11 +391,22 @@ function ChartRow({
   const widthPct = Math.max(pct(duration, totalDays), 1)
   const barColor = isCritical ? '#DC2626' : '#0E7C86'
 
+  const hasBaseline = !task.is_milestone && task.baseline_start && task.baseline_end
+  const baselineLeftPct = hasBaseline ? pct(diffDays(rangeStart, task.baseline_start!), totalDays) : 0
+  const baselineWidthPct = hasBaseline
+    ? Math.max(pct(diffDays(task.baseline_start!, task.baseline_end!) + 1, totalDays), 1)
+    : 0
+
   return (
     <View style={styles.chartRow}>
-      <Text style={[styles.td, styles.colNameChart]}>{truncateForChartRow(task.name)}</Text>
+      <Text style={[styles.td, styles.colNameChart]}>
+        {truncateForChartRow(task.activity_code ? `${task.activity_code} ${task.name}` : task.name)}
+      </Text>
       <View style={[styles.td, styles.colBarChart]}>
         <View style={styles.barTrack}>
+          {hasBaseline && (
+            <View style={[styles.baselineBar, { left: `${baselineLeftPct}%`, width: `${baselineWidthPct}%` }]} />
+          )}
           {task.is_milestone ? (
             <View style={[styles.milestoneMarker, { left: `${leftPct}%`, backgroundColor: barColor }]} />
           ) : (
@@ -354,6 +437,47 @@ function ChartRow({
         </View>
       </View>
     </View>
+  )
+}
+
+/** Total pixel height of the chart page's stacked module tables — shared by
+ *  DependencyLines and DataDateLine so both overlays agree on how tall the
+ *  page's SVG canvas is. */
+function computeChartBodyHeight(moduleGroups: { module: string; tasks: ScheduleTask[] }[]): number {
+  let cursorY = 0
+  for (const group of moduleGroups) {
+    cursorY += MODULE_TITLE_BLOCK_HEIGHT + 1 // title block + table's top border
+    cursorY += group.tasks.length * CHART_ROW_HEIGHT
+    cursorY += 1 // table's bottom border
+  }
+  return cursorY
+}
+
+/** Data Date vertical marker over the chart's bars — same fixed-geometry
+ *  approach as DependencyLines below. */
+function DataDateLine({
+  moduleGroups,
+  dataDate,
+  rangeStart,
+  totalDays,
+}: {
+  moduleGroups: { module: string; tasks: ScheduleTask[] }[]
+  dataDate: string | null
+  rangeStart: string
+  totalDays: number
+}) {
+  if (!dataDate || dataDate < rangeStart) return null
+  const totalHeight = computeChartBodyHeight(moduleGroups)
+  const x = (pct(diffDays(rangeStart, dataDate), totalDays) / 100) * CHART_COL_WIDTH_PT
+  if (x > CHART_COL_WIDTH_PT) return null
+
+  return (
+    <Svg
+      style={{ position: 'absolute', top: 134, left: 28 + CHART_NAME_COL_WIDTH_PT, width: CHART_COL_WIDTH_PT, height: totalHeight }}
+      viewBox={`0 0 ${CHART_COL_WIDTH_PT} ${totalHeight}`}
+    >
+      <Path d={`M${x},0 L${x},${totalHeight}`} stroke="#2563EB" strokeWidth={1} strokeDasharray="3 2" fill="none" />
+    </Svg>
   )
 }
 
@@ -436,6 +560,12 @@ export function SchedulePdfDocument({
   projectName,
   projectLocation,
   scopeOfWork,
+  revision,
+  dataDate,
+  targetCompletion,
+  forecastFinish,
+  targetVarianceDays,
+  scheduleHealth,
   preparedByName,
   preparedByDesignation,
   approvedByName,
@@ -453,6 +583,12 @@ export function SchedulePdfDocument({
   projectName: string
   projectLocation: string | null
   scopeOfWork: string | null
+  revision: string
+  dataDate: string | null
+  targetCompletion: string | null
+  forecastFinish: string | null
+  targetVarianceDays: number | null
+  scheduleHealth: ScheduleHealth
   preparedByName: string | null
   preparedByDesignation: string | null
   approvedByName: string | null
@@ -466,6 +602,9 @@ export function SchedulePdfDocument({
   milestoneCount: number
   overallPercent: number
 }) {
+  const hasBaseline = moduleGroups.some((g) => g.tasks.some((t) => t.baseline_start && t.baseline_end))
+  const healthStyle =
+    scheduleHealth === 'on_track' ? styles.healthOnTrack : scheduleHealth === 'watch' ? styles.healthWatch : styles.healthAtRisk
   return (
     <Document title="Project Schedule">
       {/* Page 1 — schedule as text: every task's dates, duration, % complete,
@@ -488,6 +627,12 @@ export function SchedulePdfDocument({
               {scopeOfWork}
             </Text>
           )}
+          <Text style={styles.projectMeta}>
+            <Text style={styles.projectMetaLabel}>Revision: </Text>
+            {revision}
+            {dataDate ? `   ·   Data Date: ${dataDate}` : ''}
+            {targetCompletion ? `   ·   Target Completion: ${targetCompletion}` : ''}
+          </Text>
         </View>
 
         <View style={styles.statRow}>
@@ -509,6 +654,25 @@ export function SchedulePdfDocument({
           </View>
         </View>
 
+        <View style={styles.statRow}>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Forecast Finish</Text>
+            <Text style={styles.statValue}>{forecastFinish ?? '—'}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Target Completion</Text>
+            <Text style={styles.statValue}>{targetCompletion ?? '—'}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Variance vs. Target</Text>
+            <Text style={styles.statValue}>{formatVariance(targetVarianceDays)}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Schedule Health</Text>
+            <Text style={[styles.statValue, healthStyle]}>{SCHEDULE_HEALTH_LABELS[scheduleHealth]}</Text>
+          </View>
+        </View>
+
         {moduleGroups.map((group) => (
           <View key={group.module} wrap={false}>
             <Text style={styles.moduleTitle}>
@@ -516,11 +680,13 @@ export function SchedulePdfDocument({
             </Text>
             <View style={styles.table}>
               <View style={styles.tHeadRow}>
+                <Text style={[styles.th, styles.colCode]}>ID</Text>
                 <Text style={[styles.th, styles.colNameText]}>Task</Text>
                 <Text style={[styles.th, styles.colDate]}>Start</Text>
                 <Text style={[styles.th, styles.colDate]}>Finish</Text>
                 <Text style={[styles.th, styles.colDur]}>Duration</Text>
                 <Text style={[styles.th, styles.colPct]}>Complete</Text>
+                <Text style={[styles.th, styles.colVariance]}>Variance</Text>
                 <Text style={[styles.th, styles.colCritical]}>Path</Text>
               </View>
               {group.tasks.map((task) => (
@@ -540,7 +706,13 @@ export function SchedulePdfDocument({
       <Page size="A4" orientation="landscape" style={[styles.page, styles.pageWithAxis]}>
         <ReportHeader generatedDate={generatedDate} />
         <ReportFooter />
-        <ChartPageHeader projectName={projectName} rangeStart={rangeStart} totalDays={totalDays} />
+        <ChartPageHeader
+          projectName={projectName}
+          rangeStart={rangeStart}
+          totalDays={totalDays}
+          hasBaseline={hasBaseline}
+          hasDataDate={!!dataDate}
+        />
 
         {moduleGroups.map((group) => (
           <View key={group.module} wrap={false}>
@@ -561,6 +733,7 @@ export function SchedulePdfDocument({
           </View>
         ))}
 
+        <DataDateLine moduleGroups={moduleGroups} dataDate={dataDate} rangeStart={rangeStart} totalDays={totalDays} />
         <DependencyLines moduleGroups={moduleGroups} dependencies={dependencies} rangeStart={rangeStart} totalDays={totalDays} />
 
         <SignatureBlocks

@@ -13,76 +13,126 @@ import {
   ChevronDown,
   ChevronUp,
   Info,
+  FolderKanban,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { GanttChart } from '@/components/gantt/GanttChart'
 import { computeTimelineRange, type GanttZoom } from '@/components/gantt/ganttGeometry'
-import { cascadeReschedule, computeCriticalPath, durationDays, todayIso, wouldCreateCycle } from '@/lib/scheduleEngine'
+import {
+  cascadeReschedule,
+  computeCriticalPath,
+  computeForecastFinish,
+  computeScheduleHealth,
+  computeTargetVarianceDays,
+  deriveStatus,
+  durationDays,
+  nextActivityCode,
+  taskBaselineVarianceDays,
+  todayIso,
+  wouldCreateCycle,
+} from '@/lib/scheduleEngine'
 import {
   bulkUpdateTaskDates,
   clearBaselineForAll,
   createDependency,
+  createProject,
   createTask,
   deleteDependency,
   deleteReport,
   deleteTask,
-  getProjectInfo,
   getReportSignedUrl,
   listDependencies,
+  listProjects,
   listReports,
   listTasks,
   saveReport,
   setBaselineForAll,
   updateDependency,
-  updateProjectInfo,
+  updateProject,
   updateTask,
 } from '@/services/scheduleService'
-import { DEPENDENCY_TYPES, DEPENDENCY_TYPE_LABELS } from '@/types'
-import type { DependencyType, ProjectInfo, ScheduleDependency, ScheduleReport, ScheduleTask } from '@/types'
+import { DEPENDENCY_TYPES, DEPENDENCY_TYPE_LABELS, SCHEDULE_HEALTH_LABELS } from '@/types'
+import type {
+  ActivityStatus,
+  DependencyType,
+  Project,
+  ScheduleDependency,
+  ScheduleHealth,
+  ScheduleReport,
+  ScheduleTask,
+  WorkCalendarDays,
+} from '@/types'
 
 const APP_TITLE = 'XA Gantt & Scheduling'
+const LAST_PROJECT_KEY = 'xa-gantt:last-project-id'
 const ZOOM_OPTIONS: { value: GanttZoom; label: string }[] = [
   { value: 'day', label: 'Day' },
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
 ]
+const WORK_CALENDAR_OPTIONS: { value: WorkCalendarDays; label: string }[] = [
+  { value: 5, label: '5-Day Week (Mon–Fri)' },
+  { value: 6, label: '6-Day Week (Mon–Sat)' },
+  { value: 7, label: '7-Day Week' },
+]
+const HEALTH_TONE: Record<ScheduleHealth, string> = {
+  on_track: 'text-emerald-600',
+  watch: 'text-amber-600',
+  at_risk: 'text-red-600',
+}
 
 export function SchedulePage() {
   const { user } = useAuth()
   const editable = user?.role === 'editor'
 
+  const [projects, setProjects] = useState<Project[]>([])
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
   const [tasks, setTasks] = useState<ScheduleTask[]>([])
   const [dependencies, setDependencies] = useState<ScheduleDependency[]>([])
   const [reports, setReports] = useState<ScheduleReport[]>([])
-  const [projectInfo, setProjectInfo] = useState<ProjectInfo>({
-    project_name: null,
-    project_location: null,
-    scope_of_work: null,
-    prepared_by_name: null,
-    prepared_by_title: null,
-    approved_by_name: null,
-    approved_by_title: null,
-  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [zoom, setZoom] = useState<GanttZoom>('week')
   const [showBaseline, setShowBaseline] = useState(false)
   const [collapsedModules, setCollapsedModules] = useState<Set<string>>(new Set())
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; task?: ScheduleTask } | null>(null)
-  const [showProjectInfoModal, setShowProjectInfoModal] = useState(false)
+  const [showProjectSettingsModal, setShowProjectSettingsModal] = useState(false)
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false)
   const [exporting, setExporting] = useState<'download' | 'save' | 'excel' | null>(null)
   const [showReports, setShowReports] = useState(false)
   const [busyAction, setBusyAction] = useState(false)
 
-  async function refresh() {
+  const currentProject = useMemo(() => projects.find((p) => p.id === currentProjectId) ?? null, [projects, currentProjectId])
+  const calendarDays: WorkCalendarDays = currentProject?.work_calendar_days ?? 6
+
+  // Load the project list once, then pick up wherever the user left off
+  // (localStorage), falling back to the first project.
+  useEffect(() => {
+    ;(async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const p = await listProjects()
+        setProjects(p)
+        const saved = localStorage.getItem(LAST_PROJECT_KEY)
+        const initial = (saved && p.find((x) => x.id === saved)?.id) || p[0]?.id || null
+        setCurrentProjectId(initial)
+        if (!initial) setLoading(false)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load projects')
+        setLoading(false)
+      }
+    })()
+  }, [])
+
+  async function refresh(projectId: string) {
     setLoading(true)
     setError('')
     try {
-      const [t, d, r, p] = await Promise.all([listTasks(), listDependencies(), listReports(), getProjectInfo()])
+      const [t, d, r] = await Promise.all([listTasks(projectId), listDependencies(projectId), listReports(projectId)])
       setTasks(t)
       setDependencies(d)
       setReports(r)
-      setProjectInfo(p)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load schedule')
     } finally {
@@ -91,8 +141,10 @@ export function SchedulePage() {
   }
 
   useEffect(() => {
-    refresh()
-  }, [])
+    if (!currentProjectId) return
+    localStorage.setItem(LAST_PROJECT_KEY, currentProjectId)
+    refresh(currentProjectId)
+  }, [currentProjectId])
 
   // Task sort_order is a single global order key (not per-module): sorting
   // every task by it and grouping by module while keeping first-appearance
@@ -130,6 +182,16 @@ export function SchedulePage() {
     return { total, milestones, completed, overallPercent, overdue, criticalCount: criticalIds.size }
   }, [tasks, criticalIds])
 
+  const forecastFinish = useMemo(() => computeForecastFinish(tasks), [tasks])
+  const targetVarianceDays = useMemo(
+    () => computeTargetVarianceDays(forecastFinish, currentProject?.target_completion ?? null),
+    [forecastFinish, currentProject]
+  )
+  const scheduleHealth = useMemo(
+    () => computeScheduleHealth(tasks, criticalIds, forecastFinish, currentProject?.target_completion ?? null, todayIso()),
+    [tasks, criticalIds, forecastFinish, currentProject]
+  )
+
   function toggleModule(name: string) {
     setCollapsedModules((prev) => {
       const next = new Set(prev)
@@ -143,7 +205,7 @@ export function SchedulePage() {
 
   async function handleTaskDatesChange(taskId: string, window: { start_date: string; end_date: string }) {
     const withUpdate = tasks.map((t) => (t.id === taskId ? { ...t, ...window } : t))
-    const cascaded = cascadeReschedule(withUpdate, dependencies, [taskId])
+    const cascaded = cascadeReschedule(withUpdate, dependencies, [taskId], calendarDays)
     const finalTasks = withUpdate.map((t) => (cascaded.has(t.id) ? { ...t, ...cascaded.get(t.id)! } : t))
     setTasks(finalTasks)
     try {
@@ -153,7 +215,7 @@ export function SchedulePage() {
       ])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save the new dates')
-      await refresh()
+      if (currentProjectId) await refresh(currentProjectId)
     }
   }
 
@@ -175,7 +237,7 @@ export function SchedulePage() {
       await Promise.all(updates.map((u) => updateTask(u.id, { sort_order: u.sort_order })))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to reorder')
-      await refresh()
+      if (currentProjectId) await refresh(currentProjectId)
     }
   }
 
@@ -204,16 +266,22 @@ export function SchedulePage() {
   }
 
   async function handleLinkTasks(predecessorId: string, successorId: string) {
+    if (!currentProjectId) return
     if (dependencies.some((d) => d.predecessor_id === predecessorId && d.successor_id === successorId)) return
     if (wouldCreateCycle(dependencies, predecessorId, successorId)) {
       setError('That link would create a circular dependency — not created.')
       return
     }
     try {
-      const dep = await createDependency({ predecessor_id: predecessorId, successor_id: successorId, dep_type: 'FS' })
+      const dep = await createDependency({
+        project_id: currentProjectId,
+        predecessor_id: predecessorId,
+        successor_id: successorId,
+        dep_type: 'FS',
+      })
       const nextDeps = [...dependencies, dep]
       setDependencies(nextDeps)
-      const cascaded = cascadeReschedule(tasks, nextDeps, [predecessorId])
+      const cascaded = cascadeReschedule(tasks, nextDeps, [predecessorId], calendarDays)
       if (cascaded.size > 0) {
         setTasks((prev) => prev.map((t) => (cascaded.has(t.id) ? { ...t, ...cascaded.get(t.id)! } : t)))
         await bulkUpdateTaskDates(Array.from(cascaded.entries()).map(([id, w]) => ({ id, ...w })))
@@ -224,12 +292,13 @@ export function SchedulePage() {
   }
 
   async function handleSetBaseline() {
+    if (!currentProjectId) return
     if (!window.confirm('Snapshot every task’s current start/finish as the baseline for planned-vs-actual reporting?')) return
     setBusyAction(true)
     try {
       await setBaselineForAll(tasks)
       setShowBaseline(true)
-      await refresh()
+      await refresh(currentProjectId)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to set baseline')
     } finally {
@@ -238,10 +307,11 @@ export function SchedulePage() {
   }
 
   async function handleClearBaseline() {
+    if (!currentProjectId) return
     setBusyAction(true)
     try {
       await clearBaselineForAll(tasks)
-      await refresh()
+      await refresh(currentProjectId)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to clear baseline')
     } finally {
@@ -297,13 +367,19 @@ export function SchedulePage() {
     return pdf(
       <SchedulePdfDocument
         generatedDate={generatedDate}
-        projectName={projectInfo.project_name || APP_TITLE}
-        projectLocation={projectInfo.project_location}
-        scopeOfWork={projectInfo.scope_of_work}
-        preparedByName={projectInfo.prepared_by_name || user?.full_name || null}
-        preparedByDesignation={projectInfo.prepared_by_title || user?.designation || null}
-        approvedByName={projectInfo.approved_by_name}
-        approvedByTitle={projectInfo.approved_by_title}
+        projectName={currentProject?.name || APP_TITLE}
+        projectLocation={currentProject?.location ?? null}
+        scopeOfWork={currentProject?.scope_of_work ?? null}
+        revision={currentProject?.revision ?? '00'}
+        dataDate={currentProject?.data_date ?? null}
+        targetCompletion={currentProject?.target_completion ?? null}
+        forecastFinish={forecastFinish}
+        targetVarianceDays={targetVarianceDays}
+        scheduleHealth={scheduleHealth}
+        preparedByName={currentProject?.prepared_by_name || user?.full_name || null}
+        preparedByDesignation={currentProject?.prepared_by_title || user?.designation || null}
+        approvedByName={currentProject?.approved_by_name ?? null}
+        approvedByTitle={currentProject?.approved_by_title ?? null}
         moduleGroups={moduleGroups}
         dependencies={dependencies}
         rangeStart={range.startIso}
@@ -340,10 +416,11 @@ export function SchedulePage() {
   }
 
   async function handleSaveReport() {
+    if (!currentProjectId) return
     setExporting('save')
     try {
       const blob = await buildPdfBlob()
-      const report = await saveReport(blob, `Project-Schedule-${todayIso()}.pdf`)
+      const report = await saveReport(blob, `Project-Schedule-${todayIso()}.pdf`, currentProjectId)
       setReports((prev) => [report, ...prev])
       setShowReports(true)
     } catch (e) {
@@ -362,9 +439,11 @@ export function SchedulePage() {
       const generatedDate = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
 
       const blob = await buildScheduleWorkbookBlob({
-        projectName: projectInfo.project_name || APP_TITLE,
-        projectLocation: projectInfo.project_location,
-        scopeOfWork: projectInfo.scope_of_work,
+        projectName: currentProject?.name || APP_TITLE,
+        projectLocation: currentProject?.location ?? null,
+        scopeOfWork: currentProject?.scope_of_work ?? null,
+        revision: currentProject?.revision ?? '00',
+        dataDate: currentProject?.data_date ?? null,
         generatedDate,
         moduleGroups,
         dependencies,
@@ -407,20 +486,81 @@ export function SchedulePage() {
     )
   }
 
+  if (!currentProject) {
+    return (
+      <div className="space-y-4">
+        {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        <div className="rounded-2xl border border-dashed border-brand-line bg-white p-10 text-center">
+          <p className="mb-3 text-sm text-brand-slate">No projects yet.</p>
+          {editable && (
+            <button
+              onClick={() => setShowNewProjectModal(true)}
+              className="rounded-lg bg-brand-ink px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+            >
+              Create your first project
+            </button>
+          )}
+        </div>
+        {showNewProjectModal && (
+          <NewProjectModal
+            busy={busyAction}
+            onClose={() => setShowNewProjectModal(false)}
+            onCreate={async (name) => {
+              setBusyAction(true)
+              try {
+                const created = await createProject({ name })
+                setProjects((prev) => [...prev, created])
+                setCurrentProjectId(created.id)
+                setShowNewProjectModal(false)
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Failed to create project')
+              } finally {
+                setBusyAction(false)
+              }
+            }}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4 pb-24">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-brand-ink">{projectInfo.project_name || 'Project Schedule'}</h1>
+          <div className="flex items-center gap-2">
+            <FolderKanban size={14} className="text-brand-slate" />
+            <select
+              value={currentProject.id}
+              onChange={(e) => setCurrentProjectId(e.target.value)}
+              className="rounded-lg border border-brand-line bg-white px-2 py-1 text-xs font-semibold text-brand-ink"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {editable && (
+              <button
+                onClick={() => setShowNewProjectModal(true)}
+                className="text-xs font-semibold text-brand-teal hover:underline"
+              >
+                + New project
+              </button>
+            )}
+          </div>
+          <h1 className="mt-1 text-xl font-bold text-brand-ink">{currentProject.name}</h1>
           <p className="text-sm text-brand-slate">
-            {projectInfo.project_location ? `${projectInfo.project_location} · ` : ''}Gantt &amp; critical-path view
+            {currentProject.location ? `${currentProject.location} · ` : ''}Rev {currentProject.revision}
+            {currentProject.data_date ? ` · Data Date ${currentProject.data_date}` : ''}
           </p>
           {editable && (
             <button
-              onClick={() => setShowProjectInfoModal(true)}
+              onClick={() => setShowProjectSettingsModal(true)}
               className="mt-1 flex items-center gap-1 text-xs font-semibold text-brand-slate hover:text-brand-teal"
             >
-              <Info size={12} /> {projectInfo.project_name ? 'Edit project info' : 'Add project info'}
+              <Info size={12} /> Project settings
             </button>
           )}
         </div>
@@ -449,6 +589,17 @@ export function SchedulePage() {
         <StatCard label="Completed" value={stats.completed} />
         <StatCard label="Overdue" value={stats.overdue} tone={stats.overdue > 0 ? 'danger' : undefined} />
         <StatCard label="On critical path" value={stats.criticalCount} tone="critical" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard label="Forecast finish" value={forecastFinish ?? '—'} />
+        <StatCard label="Target completion" value={currentProject.target_completion ?? '—'} />
+        <StatCard
+          label="Variance vs. target"
+          value={targetVarianceDays === null ? '—' : formatVarianceDays(targetVarianceDays)}
+          tone={targetVarianceDays !== null && targetVarianceDays > 0 ? 'danger' : undefined}
+        />
+        <StatCard label="Schedule health" value={SCHEDULE_HEALTH_LABELS[scheduleHealth]} toneClass={HEALTH_TONE[scheduleHealth]} />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-line bg-white p-3 shadow-card">
@@ -560,6 +711,7 @@ export function SchedulePage() {
             if (task) setModal({ mode: 'edit', task })
           }}
           todayIso={todayIso()}
+          dataDateIso={currentProject.data_date}
         />
       )}
 
@@ -572,7 +724,7 @@ export function SchedulePage() {
         </p>
       )}
 
-      {modal && (
+      {modal && currentProjectId && (
         <TaskModal
           mode={modal.mode}
           task={modal.task}
@@ -584,7 +736,7 @@ export function SchedulePage() {
           onCreate={async (input) => {
             setBusyAction(true)
             try {
-              const created = await createTask({ ...input, created_by: user?.id ?? null })
+              const created = await createTask({ ...input, project_id: currentProjectId, created_by: user?.id ?? null })
               setTasks((prev) => [...prev, created])
               setModal(null)
             } catch (e) {
@@ -598,7 +750,7 @@ export function SchedulePage() {
             try {
               const updated = await updateTask(taskId, patch)
               const withUpdate = tasks.map((t) => (t.id === taskId ? updated : t))
-              const cascaded = cascadeReschedule(withUpdate, dependencies, [taskId])
+              const cascaded = cascadeReschedule(withUpdate, dependencies, [taskId], calendarDays)
               const finalTasks = withUpdate.map((t) => (cascaded.has(t.id) ? { ...t, ...cascaded.get(t.id)! } : t))
               setTasks(finalTasks)
               if (cascaded.size > 0) {
@@ -618,19 +770,39 @@ export function SchedulePage() {
         />
       )}
 
-      {showProjectInfoModal && (
-        <ProjectInfoModal
-          info={projectInfo}
+      {showProjectSettingsModal && (
+        <ProjectSettingsModal
+          project={currentProject}
           busy={busyAction}
-          onClose={() => setShowProjectInfoModal(false)}
+          onClose={() => setShowProjectSettingsModal(false)}
           onSave={async (fields) => {
             setBusyAction(true)
             try {
-              await updateProjectInfo(fields)
-              setProjectInfo(fields)
-              setShowProjectInfoModal(false)
+              const updated = await updateProject(currentProject.id, fields)
+              setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+              setShowProjectSettingsModal(false)
             } catch (e) {
-              setError(e instanceof Error ? e.message : 'Failed to save project info')
+              setError(e instanceof Error ? e.message : 'Failed to save project settings')
+            } finally {
+              setBusyAction(false)
+            }
+          }}
+        />
+      )}
+
+      {showNewProjectModal && (
+        <NewProjectModal
+          busy={busyAction}
+          onClose={() => setShowNewProjectModal(false)}
+          onCreate={async (name) => {
+            setBusyAction(true)
+            try {
+              const created = await createProject({ name })
+              setProjects((prev) => [...prev, created])
+              setCurrentProjectId(created.id)
+              setShowNewProjectModal(false)
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Failed to create project')
             } finally {
               setBusyAction(false)
             }
@@ -641,35 +813,94 @@ export function SchedulePage() {
   )
 }
 
-function ProjectInfoModal({
-  info,
+function formatVarianceDays(days: number): string {
+  if (days === 0) return 'On Plan'
+  return days > 0 ? `+${days}d` : `${days}d`
+}
+
+function NewProjectModal({
   busy,
   onClose,
-  onSave,
+  onCreate,
 }: {
-  info: ProjectInfo
   busy: boolean
   onClose: () => void
-  onSave: (fields: ProjectInfo) => Promise<void>
+  onCreate: (name: string) => Promise<void>
 }) {
-  const [projectName, setProjectName] = useState(info.project_name ?? '')
-  const [projectLocation, setProjectLocation] = useState(info.project_location ?? '')
-  const [scopeOfWork, setScopeOfWork] = useState(info.scope_of_work ?? '')
-  const [preparedByName, setPreparedByName] = useState(info.prepared_by_name ?? '')
-  const [preparedByTitle, setPreparedByTitle] = useState(info.prepared_by_title ?? '')
-  const [approvedByName, setApprovedByName] = useState(info.approved_by_name ?? '')
-  const [approvedByTitle, setApprovedByTitle] = useState(info.approved_by_title ?? '')
-
+  const [name, setName] = useState('')
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-pop">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-pop">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-bold text-brand-ink">Project info</h2>
+          <h2 className="text-base font-bold text-brand-ink">New project</h2>
           <button onClick={onClose} className="text-brand-slate hover:text-brand-ink">
             <X size={18} />
           </button>
         </div>
-        <p className="mb-4 text-sm text-brand-slate">Shown on the schedule page and every exported PDF report.</p>
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold text-brand-slate">Project name</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. The Spinnaker @ Club Laiya"
+            className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+          />
+        </label>
+        <p className="mt-2 text-xs text-brand-slate">
+          Location, scope, revision and the rest can be filled in from Project settings after it's created.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold">
+            Cancel
+          </button>
+          <button
+            onClick={() => name.trim() && onCreate(name.trim())}
+            disabled={busy || !name.trim()}
+            className="flex items-center gap-1.5 rounded-lg bg-brand-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ProjectSettingsModal({
+  project,
+  busy,
+  onClose,
+  onSave,
+}: {
+  project: Project
+  busy: boolean
+  onClose: () => void
+  onSave: (fields: Partial<Omit<Project, 'id' | 'created_at' | 'updated_at'>>) => Promise<void>
+}) {
+  const [projectName, setProjectName] = useState(project.name)
+  const [projectLocation, setProjectLocation] = useState(project.location ?? '')
+  const [scopeOfWork, setScopeOfWork] = useState(project.scope_of_work ?? '')
+  const [revision, setRevision] = useState(project.revision)
+  const [dataDate, setDataDate] = useState(project.data_date ?? '')
+  const [targetCompletion, setTargetCompletion] = useState(project.target_completion ?? '')
+  const [workCalendarDays, setWorkCalendarDays] = useState<WorkCalendarDays>(project.work_calendar_days)
+  const [preparedByName, setPreparedByName] = useState(project.prepared_by_name ?? '')
+  const [preparedByTitle, setPreparedByTitle] = useState(project.prepared_by_title ?? '')
+  const [approvedByName, setApprovedByName] = useState(project.approved_by_name ?? '')
+  const [approvedByTitle, setApprovedByTitle] = useState(project.approved_by_title ?? '')
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-pop">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-bold text-brand-ink">Project settings</h2>
+          <button onClick={onClose} className="text-brand-slate hover:text-brand-ink">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="mb-4 text-sm text-brand-slate">Shown on the schedule page and every exported PDF/Excel report.</p>
         <div className="space-y-3">
           <label className="block">
             <span className="mb-1 block text-xs font-semibold text-brand-slate">Project name</span>
@@ -696,6 +927,53 @@ function ProjectInfoModal({
               className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
             />
           </label>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-slate">Revision</span>
+              <input
+                value={revision}
+                onChange={(e) => setRevision(e.target.value)}
+                placeholder="e.g. 00"
+                className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-slate">Work calendar</span>
+              <select
+                value={workCalendarDays}
+                onChange={(e) => setWorkCalendarDays(Number(e.target.value) as WorkCalendarDays)}
+                className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+              >
+                {WORK_CALENDAR_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-slate">Data Date</span>
+              <input
+                type="date"
+                value={dataDate}
+                onChange={(e) => setDataDate(e.target.value)}
+                className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-slate">Target completion</span>
+              <input
+                type="date"
+                value={targetCompletion}
+                onChange={(e) => setTargetCompletion(e.target.value)}
+                className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+
           <div className="border-t border-brand-line pt-3">
             <p className="mb-2 text-xs font-semibold text-brand-slate">
               "Prepared by" signature block (bottom-left of the PDF)
@@ -754,9 +1032,13 @@ function ProjectInfoModal({
           <button
             onClick={() =>
               onSave({
-                project_name: projectName.trim() || null,
-                project_location: projectLocation.trim() || null,
+                name: projectName.trim() || 'Untitled Project',
+                location: projectLocation.trim() || null,
                 scope_of_work: scopeOfWork.trim() || null,
+                revision: revision.trim() || '00',
+                data_date: dataDate || null,
+                target_completion: targetCompletion || null,
+                work_calendar_days: workCalendarDays,
                 prepared_by_name: preparedByName.trim() || null,
                 prepared_by_title: preparedByTitle.trim() || null,
                 approved_by_name: approvedByName.trim() || null,
@@ -775,8 +1057,18 @@ function ProjectInfoModal({
   )
 }
 
-function StatCard({ label, value, tone }: { label: string; value: number; tone?: 'danger' | 'critical' }) {
-  const valueClass = tone === 'danger' ? 'text-red-600' : tone === 'critical' ? 'text-red-600' : 'text-brand-ink'
+function StatCard({
+  label,
+  value,
+  tone,
+  toneClass,
+}: {
+  label: string
+  value: number | string
+  tone?: 'danger' | 'critical'
+  toneClass?: string
+}) {
+  const valueClass = toneClass ?? (tone === 'danger' || tone === 'critical' ? 'text-red-600' : 'text-brand-ink')
   return (
     <div className="rounded-xl border border-brand-line bg-white p-3 shadow-card">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-slate">{label}</p>
@@ -817,12 +1109,15 @@ function ToolbarButton({
 // ---------------------------------------------------------------------------
 
 interface TaskFormInput {
+  activity_code?: string | null
   name: string
   module?: string | null
   start_date: string
   end_date: string
   is_milestone?: boolean
   percent_complete?: number
+  actual_start?: string | null
+  actual_finish?: string | null
   assignee?: string | null
   notes?: string | null
 }
@@ -862,6 +1157,9 @@ function TaskModal({
   const [endDate, setEndDate] = useState(task?.end_date ?? todayIso())
   const [isMilestone, setIsMilestone] = useState(task?.is_milestone ?? false)
   const [percentComplete, setPercentComplete] = useState(String(task?.percent_complete ?? 0))
+  const [actualStart, setActualStart] = useState(task?.actual_start ?? '')
+  const [actualFinish, setActualFinish] = useState(task?.actual_finish ?? '')
+  const [activityCode, setActivityCode] = useState(task?.activity_code ?? nextActivityCode(allTasks, task?.is_milestone ?? false))
   const [assignee, setAssignee] = useState(task?.assignee ?? '')
   const [notes, setNotes] = useState(task?.notes ?? '')
   const [saveError, setSaveError] = useState('')
@@ -873,15 +1171,25 @@ function TaskModal({
     return durationDays({ start_date: startDate, end_date: endDate })
   }, [startDate, endDate])
 
+  const status = task ? deriveStatus({ ...task, end_date: endDate, actual_start: actualStart || null, actual_finish: actualFinish || null, percent_complete: Number(percentComplete) || 0 }, todayIso()) : null
+  const variance = task ? taskBaselineVarianceDays({ ...task, end_date: endDate }) : null
+
   function handleMilestoneToggle(checked: boolean) {
     setIsMilestone(checked)
     if (checked) setEndDate(startDate)
+    if (mode === 'create') setActivityCode(nextActivityCode(allTasks, checked))
   }
 
   function handleStartChange(value: string) {
     setStartDate(value)
     if (isMilestone) setEndDate(value)
     else if (endDate < value) setEndDate(value)
+  }
+
+  // Per spec: entering an Actual Finish means the activity is done.
+  function handleActualFinishChange(value: string) {
+    setActualFinish(value)
+    if (value) setPercentComplete('100')
   }
 
   async function handleSubmit() {
@@ -895,12 +1203,15 @@ function TaskModal({
       return
     }
     const input: TaskFormInput = {
+      activity_code: activityCode.trim() || null,
       name: name.trim(),
       module: moduleName.trim() || null,
       start_date: startDate,
       end_date: isMilestone ? startDate : endDate,
       is_milestone: isMilestone,
       percent_complete: Math.max(0, Math.min(100, Number(percentComplete) || 0)),
+      actual_start: actualStart || null,
+      actual_finish: actualFinish || null,
       assignee: assignee.trim() || null,
       notes: notes.trim() || null,
     }
@@ -924,6 +1235,7 @@ function TaskModal({
     }
     try {
       const dep = await createDependency({
+        project_id: task.project_id,
         predecessor_id: newPredId,
         successor_id: task.id,
         dep_type: newDepType,
@@ -975,7 +1287,19 @@ function TaskModal({
         </div>
 
         <div className="space-y-3">
-          <Field label="Task name" value={name} onChange={setName} />
+          <div className="grid grid-cols-3 gap-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-slate">Activity ID</span>
+              <input
+                value={activityCode}
+                onChange={(e) => setActivityCode(e.target.value)}
+                className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+              />
+            </label>
+            <div className="col-span-2">
+              <Field label="Task name" value={name} onChange={setName} />
+            </div>
+          </div>
           <label className="block">
             <span className="mb-1 block text-xs font-semibold text-brand-slate">Module</span>
             <input
@@ -1034,6 +1358,42 @@ function TaskModal({
             </label>
             <Field label="Assignee" value={assignee} onChange={setAssignee} placeholder="Optional" />
           </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-slate">Actual start</span>
+              <input
+                type="date"
+                value={actualStart}
+                onChange={(e) => setActualStart(e.target.value)}
+                className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-brand-slate">Actual finish</span>
+              <input
+                type="date"
+                value={actualFinish}
+                onChange={(e) => handleActualFinishChange(e.target.value)}
+                className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+
+          {task && (
+            <div className="flex items-center gap-4 rounded-lg bg-slate-50 px-3 py-2 text-xs">
+              <span>
+                <span className="font-semibold text-brand-slate">Status: </span>
+                <span className="font-semibold text-brand-ink">{status}</span>
+              </span>
+              <span>
+                <span className="font-semibold text-brand-slate">Vs. baseline: </span>
+                <span className={`font-semibold ${variance !== null && variance > 0 ? 'text-red-600' : 'text-brand-ink'}`}>
+                  {variance === null ? 'No baseline' : variance === 0 ? 'On Plan' : variance > 0 ? `+${variance}d` : `${variance}d`}
+                </span>
+              </span>
+            </div>
+          )}
 
           <button
             type="button"

@@ -10,13 +10,15 @@
 
 import ExcelJS from 'exceljs'
 import type { ScheduleDependency, ScheduleTask } from '@/types'
-import { addDays, diffDays, durationDays } from './scheduleEngine'
+import { addDays, deriveStatus, diffDays, durationDays, taskBaselineVarianceDays, todayIso } from './scheduleEngine'
 import { moduleColor } from '@/components/gantt/ganttGeometry'
 
 export interface ScheduleExcelInput {
   projectName: string
   projectLocation: string | null
   scopeOfWork: string | null
+  revision: string
+  dataDate: string | null
   generatedDate: string
   moduleGroups: { module: string; tasks: ScheduleTask[] }[]
   dependencies: ScheduleDependency[]
@@ -33,6 +35,7 @@ const HEADER_INK = 'FF0F172A'
 const WEEKEND_TINT = 'FFF1F5F9'
 const BORDER_LINE = 'FFE2E8F0'
 const WHITE = 'FFFFFFFF'
+const DATA_DATE_BLUE = 'FF2563EB'
 
 const thinBorder = { style: 'thin' as const, color: { argb: BORDER_LINE } }
 
@@ -74,6 +77,9 @@ function addTitleBlock(sheet: ExcelJS.Worksheet, input: ScheduleExcelInput, last
     sheet.mergeCells(row.number, 1, row.number, lastCol)
     row.getCell(1).font = { size: 10, color: { argb: 'FF334155' } }
   }
+  const revRow = sheet.addRow([`Revision ${input.revision}${input.dataDate ? `   ·   Data Date: ${input.dataDate}` : ''}`])
+  sheet.mergeCells(revRow.number, 1, revRow.number, lastCol)
+  revRow.getCell(1).font = { size: 9, color: { argb: 'FF334155' } }
   const dateRow = sheet.addRow([`As of ${input.generatedDate}`])
   sheet.mergeCells(dateRow.number, 1, dateRow.number, lastCol)
   dateRow.getCell(1).font = { italic: true, size: 8, color: { argb: 'FF64748B' } }
@@ -85,12 +91,17 @@ function addTitleBlock(sheet: ExcelJS.Worksheet, input: ScheduleExcelInput, last
 function buildScheduleSheet(workbook: ExcelJS.Workbook, input: ScheduleExcelInput) {
   const sheet = workbook.addWorksheet('Schedule')
   const columns = [
+    { header: 'Activity ID', key: 'code', width: 11 },
     { header: 'Module', key: 'module', width: 20 },
     { header: 'Task', key: 'task', width: 42 },
     { header: 'Start Date', key: 'start', width: 13 },
     { header: 'Finish Date', key: 'finish', width: 13 },
     { header: 'Duration (d)', key: 'duration', width: 12 },
     { header: '% Complete', key: 'pct', width: 11 },
+    { header: 'Actual Start', key: 'actualStart', width: 13 },
+    { header: 'Actual Finish', key: 'actualFinish', width: 13 },
+    { header: 'Status', key: 'status', width: 12 },
+    { header: 'Variance (d)', key: 'variance', width: 12 },
     { header: 'Milestone', key: 'milestone', width: 10 },
     { header: 'Critical Path', key: 'critical', width: 11 },
     { header: 'Predecessors', key: 'predecessors', width: 40 },
@@ -110,23 +121,33 @@ function buildScheduleSheet(workbook: ExcelJS.Workbook, input: ScheduleExcelInpu
   })
   columns.forEach((c, i) => (sheet.getColumn(i + 1).width = c.width))
 
+  const today = todayIso()
   for (const group of input.moduleGroups) {
     for (const task of group.tasks) {
+      const variance = taskBaselineVarianceDays(task)
       const row = sheet.addRow([
+        task.activity_code ?? '',
         group.module,
         task.name,
         toExcelDate(task.start_date),
         toExcelDate(task.end_date),
         task.is_milestone ? null : durationDays(task),
         task.percent_complete / 100,
+        task.actual_start ? toExcelDate(task.actual_start) : null,
+        task.actual_finish ? toExcelDate(task.actual_finish) : null,
+        deriveStatus(task, today),
+        variance,
         task.is_milestone ? 'Yes' : '',
         input.criticalIds.has(task.id) ? 'Yes' : '',
         formatPredecessors(task.id, input.dependencies, taskById),
       ])
-      row.getCell(3).numFmt = 'yyyy-mm-dd'
       row.getCell(4).numFmt = 'yyyy-mm-dd'
-      row.getCell(6).numFmt = '0%'
-      if (input.criticalIds.has(task.id)) row.getCell(8).font = { bold: true, color: { argb: CRITICAL_RED } }
+      row.getCell(5).numFmt = 'yyyy-mm-dd'
+      row.getCell(7).numFmt = '0%'
+      row.getCell(8).numFmt = 'yyyy-mm-dd'
+      row.getCell(9).numFmt = 'yyyy-mm-dd'
+      if (variance !== null && variance > 0) row.getCell(11).font = { bold: true, color: { argb: CRITICAL_RED } }
+      if (input.criticalIds.has(task.id)) row.getCell(13).font = { bold: true, color: { argb: CRITICAL_RED } }
       row.eachCell((cell) => {
         cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
       })
@@ -167,6 +188,7 @@ function buildGanttSheet(workbook: ExcelJS.Workbook, input: ScheduleExcelInput) 
   })
 
   const todayOffset = diffDays(rangeStart, new Date().toISOString().slice(0, 10))
+  const dataDateOffset = input.dataDate ? diffDays(rangeStart, input.dataDate) : null
   let monthStartCol = LEAD_COLS + 1
   let monthLabel = ''
   for (let i = 0; i <= totalDays; i++) {
@@ -239,6 +261,8 @@ function buildGanttSheet(workbook: ExcelJS.Workbook, input: ScheduleExcelInput) 
 
         if (i === todayOffset) {
           cell.border = { ...cell.border, left: { style: 'medium', color: { argb: CRITICAL_RED } } }
+        } else if (i === dataDateOffset) {
+          cell.border = { ...cell.border, left: { style: 'medium', color: { argb: DATA_DATE_BLUE } } }
         }
       }
     }

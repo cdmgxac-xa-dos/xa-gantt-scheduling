@@ -37,6 +37,7 @@ export function GanttChart({
   onReorderTask,
   onReorderModule,
   todayIso,
+  dataDateIso,
 }: {
   tasks: ScheduleTask[]
   dependencies: ScheduleDependency[]
@@ -52,6 +53,7 @@ export function GanttChart({
   onReorderTask: (taskId: string, direction: 'up' | 'down') => void
   onReorderModule: (moduleKey: string, direction: 'up' | 'down') => void
   todayIso: string
+  dataDateIso?: string | null
 }) {
   const dayWidth = DAY_WIDTH[zoom]
   const containerRef = useRef<HTMLDivElement>(null)
@@ -214,6 +216,7 @@ export function GanttChart({
 
   const bodyHeight = visibleRows.length * ROW_HEIGHT
   const todayX = xForIso(range, todayIso, dayWidth)
+  const dataDateX = dataDateIso ? xForIso(range, dataDateIso, dayWidth) : null
 
   return (
     <div className="flex overflow-hidden rounded-2xl border border-brand-line bg-white shadow-card">
@@ -272,6 +275,7 @@ export function GanttChart({
                 style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT }}
               >
                 <span className="min-w-0 flex-1 truncate text-xs text-brand-ink" title={row.task.name}>
+                  {row.task.activity_code && <span className="text-brand-slate">{row.task.activity_code} · </span>}
                   {row.task.name}
                 </span>
                 {editable && (
@@ -348,6 +352,15 @@ export function GanttChart({
 
             {/* today line */}
             <div className="absolute top-0 z-10 w-px bg-red-500" style={{ left: todayX, height: bodyHeight }} />
+
+            {/* data date line */}
+            {dataDateX !== null && (
+              <div
+                className="pointer-events-none absolute top-0 z-10 w-px border-l-2 border-dashed border-blue-500"
+                style={{ left: dataDateX, height: bodyHeight }}
+                title={`Data Date: ${dataDateIso}`}
+              />
+            )}
 
             {/* row backgrounds + module bands (labels live in the activity list on the left) */}
             {visibleRows.map((row, i) =>
