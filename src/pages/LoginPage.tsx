@@ -14,6 +14,7 @@ export function LoginPage() {
 
   const [bootstrapName, setBootstrapName] = useState('')
   const [bootstrapEmail, setBootstrapEmail] = useState('')
+  const [bootstrapDesignation, setBootstrapDesignation] = useState('')
 
   useEffect(() => {
     editorExists()
@@ -29,7 +30,7 @@ export function LoginPage() {
     setBusy(true)
     setError('')
     try {
-      await bootstrapFirstEditor(bootstrapName, bootstrapEmail)
+      await bootstrapFirstEditor(bootstrapName, bootstrapEmail, bootstrapDesignation)
       await requestMagicLink(bootstrapEmail)
       setSentTo(bootstrapEmail)
     } catch (e) {
@@ -102,6 +103,12 @@ export function LoginPage() {
               <form onSubmit={handleBootstrap} className="space-y-3">
                 <Field label="Full name" value={bootstrapName} onChange={setBootstrapName} required />
                 <Field label="Email" type="email" value={bootstrapEmail} onChange={setBootstrapEmail} required />
+                <Field
+                  label="Designation"
+                  value={bootstrapDesignation}
+                  onChange={setBootstrapDesignation}
+                  placeholder="e.g. Project Manager"
+                />
                 {error && <p className="text-sm text-red-600">{error}</p>}
                 <SubmitButton busy={busy} label="Create editor account" />
               </form>
@@ -130,12 +137,14 @@ function Field({
   onChange,
   type = 'text',
   required,
+  placeholder,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   type?: string
   required?: boolean
+  placeholder?: string
 }) {
   return (
     <label className="block">
@@ -144,6 +153,7 @@ function Field({
         type={type}
         value={value}
         required={required}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm outline-none focus:border-brand-teal focus:ring-1 focus:ring-brand-teal"
       />

@@ -1,7 +1,22 @@
 import { requireSupabase } from '@/lib/supabaseClient'
-import type { DependencyType, ScheduleDependency, ScheduleReport, ScheduleTask } from '@/types'
+import type { DependencyType, ProjectInfo, ScheduleDependency, ScheduleReport, ScheduleTask } from '@/types'
 
 const REPORTS_BUCKET = 'gantt-reports'
+
+export async function getProjectInfo(): Promise<ProjectInfo> {
+  const { data, error } = await requireSupabase()
+    .from('gantt_project_info')
+    .select('project_name, project_location, scope_of_work')
+    .eq('id', true)
+    .single()
+  if (error) throw error
+  return data as ProjectInfo
+}
+
+export async function updateProjectInfo(fields: ProjectInfo): Promise<void> {
+  const { error } = await requireSupabase().from('gantt_project_info').update(fields).eq('id', true)
+  if (error) throw error
+}
 
 export async function listTasks(): Promise<ScheduleTask[]> {
   const { data, error } = await requireSupabase()

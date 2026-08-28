@@ -32,7 +32,7 @@ export async function editorExists(): Promise<boolean> {
 }
 
 /** Bootstrap the very first Editor account. They sign in the same way as everyone else — via the emailed link. */
-export async function bootstrapFirstEditor(fullName: string, email: string) {
+export async function bootstrapFirstEditor(fullName: string, email: string, designation: string) {
   const client = ephemeralClient()
   const { data, error } = await client.auth.signUp({ email, password: randomPassword() })
   if (error) throw error
@@ -44,12 +44,13 @@ export async function bootstrapFirstEditor(fullName: string, email: string) {
     full_name: fullName,
     email,
     role: 'editor',
+    designation: designation.trim() || null,
   })
   if (userError) throw userError
 }
 
 /** An existing Editor creates any other account (Editor or Viewer) — no password to set or share. */
-export async function createAccount(fullName: string, email: string, role: AppRole) {
+export async function createAccount(fullName: string, email: string, role: AppRole, designation: string) {
   const client = ephemeralClient()
   const { data, error } = await client.auth.signUp({ email, password: randomPassword() })
   if (error) throw error
@@ -61,6 +62,7 @@ export async function createAccount(fullName: string, email: string, role: AppRo
     full_name: fullName,
     email,
     role,
+    designation: designation.trim() || null,
   })
   if (userError) throw userError
 }
@@ -101,8 +103,11 @@ export async function listAllUsers(): Promise<AppUser[]> {
   return data as AppUser[]
 }
 
-/** An Editor edits another account's name and/or role. */
-export async function updateUser(id: string, fields: { full_name: string; role: AppRole }) {
+/** An Editor edits another account's name, role, and/or designation. */
+export async function updateUser(
+  id: string,
+  fields: { full_name: string; role: AppRole; designation: string | null }
+) {
   const { error } = await requireSupabase().from('gantt_app_users').update(fields).eq('id', id)
   if (error) throw error
 }

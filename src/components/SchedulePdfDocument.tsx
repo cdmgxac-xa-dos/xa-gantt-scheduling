@@ -4,8 +4,8 @@ import { diffDays, durationDays } from '@/lib/scheduleEngine'
 
 const styles = StyleSheet.create({
   page: {
-    paddingTop: 60,
-    paddingBottom: 40,
+    paddingTop: 56,
+    paddingBottom: 90,
     paddingHorizontal: 28,
     fontSize: 8,
     fontFamily: 'Helvetica',
@@ -17,15 +17,18 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     paddingHorizontal: 28,
-    paddingTop: 18,
-    paddingBottom: 10,
+    paddingTop: 16,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#CBD5E1',
   },
-  headerTitle: { fontSize: 13, fontFamily: 'Helvetica-Bold', color: '#0F172A' },
-  headerSubtitle: { fontSize: 9, color: '#475569', marginTop: 2 },
+  headerTitle: { fontSize: 11, fontFamily: 'Helvetica-Bold', color: '#0F172A' },
   headerDate: { fontSize: 8, color: '#64748B', marginTop: 2 },
   footer: { position: 'absolute', bottom: 16, right: 28, textAlign: 'right', fontSize: 8, color: '#64748B' },
+  projectBlock: { marginBottom: 14 },
+  projectName: { fontSize: 15, fontFamily: 'Helvetica-Bold', color: '#0F172A' },
+  projectMeta: { fontSize: 9, color: '#334155', marginTop: 3 },
+  projectMetaLabel: { fontFamily: 'Helvetica-Bold', color: '#475569' },
   statRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
   statCard: { flex: 1, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 4, padding: 8 },
   statLabel: { fontSize: 7, color: '#64748B', textTransform: 'uppercase' },
@@ -53,8 +56,24 @@ const styles = StyleSheet.create({
   barTrack: { height: 8, position: 'relative' },
   barFill: { position: 'absolute', top: 0, height: 8, borderRadius: 2, borderWidth: 0.5, borderColor: '#0E7C86' },
   barProgress: { position: 'absolute', top: 0, left: 0, height: 8, borderRadius: 2, backgroundColor: '#0E7C86' },
+  milestoneMarker: {
+    position: 'absolute',
+    top: 0,
+    width: 8,
+    height: 8,
+    marginLeft: -4,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+    transform: 'rotate(45deg)',
+  },
   endRule: { marginTop: 20, borderTopWidth: 1, borderTopColor: '#0F172A' },
   endText: { marginTop: 6, textAlign: 'right', fontSize: 9, fontFamily: 'Helvetica-BoldOblique', color: '#334155' },
+  signatureBlock: { position: 'absolute', left: 28, bottom: 24, width: 200 },
+  sigLabel: { fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#0F172A', marginBottom: 4 },
+  sigSpace: { height: 34 },
+  sigLine: { width: 180, borderTopWidth: 1, borderTopColor: '#0F172A' },
+  sigName: { fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#0F172A', marginTop: 4 },
+  sigDesignation: { fontSize: 8, color: '#475569', marginTop: 1 },
 })
 
 function pct(numerator: number, denominator: number): number {
@@ -76,43 +95,49 @@ function TaskRow({
   const duration = durationDays(task)
   const leftPct = pct(offsetDays, totalDays)
   const widthPct = Math.max(pct(duration, totalDays), 1)
+  const barColor = isCritical ? '#DC2626' : '#0E7C86'
 
   return (
     <View style={styles.tRow}>
-      <Text style={[styles.td, styles.colName]}>
-        {task.is_milestone ? '◆ ' : ''}
-        {task.name}
-      </Text>
+      {/* Milestones used to be marked with a "◆" prefix here — react-pdf's base
+          Helvetica font doesn't include that glyph and silently substitutes a
+          garbage character instead of erroring, which is what corrupted these
+          rows' text. Marking milestones on the timeline (below) instead. */}
+      <Text style={[styles.td, styles.colName]}>{task.name}</Text>
       <Text style={[styles.td, styles.colDate]}>{task.start_date}</Text>
       <Text style={[styles.td, styles.colDate]}>{task.end_date}</Text>
       <Text style={[styles.td, styles.colDur]}>{task.is_milestone ? '—' : `${duration}d`}</Text>
       <Text style={[styles.td, styles.colPct]}>{task.percent_complete}%</Text>
       <View style={[styles.td, styles.colBar]}>
-        {!task.is_milestone && (
-          <View style={styles.barTrack}>
-            <View
-              style={[
-                styles.barFill,
-                {
-                  left: `${leftPct}%`,
-                  width: `${widthPct}%`,
-                  backgroundColor: isCritical ? '#FEE2E2' : '#ECFEFF',
-                  borderColor: isCritical ? '#DC2626' : '#0E7C86',
-                },
-              ]}
-            />
-            <View
-              style={[
-                styles.barProgress,
-                {
-                  left: `${leftPct}%`,
-                  width: `${(widthPct * Math.min(100, Math.max(0, task.percent_complete))) / 100}%`,
-                  backgroundColor: isCritical ? '#DC2626' : '#0E7C86',
-                },
-              ]}
-            />
-          </View>
-        )}
+        <View style={styles.barTrack}>
+          {task.is_milestone ? (
+            <View style={[styles.milestoneMarker, { left: `${leftPct}%`, backgroundColor: barColor }]} />
+          ) : (
+            <>
+              <View
+                style={[
+                  styles.barFill,
+                  {
+                    left: `${leftPct}%`,
+                    width: `${widthPct}%`,
+                    backgroundColor: isCritical ? '#FEE2E2' : '#ECFEFF',
+                    borderColor: barColor,
+                  },
+                ]}
+              />
+              <View
+                style={[
+                  styles.barProgress,
+                  {
+                    left: `${leftPct}%`,
+                    width: `${(widthPct * Math.min(100, Math.max(0, task.percent_complete))) / 100}%`,
+                    backgroundColor: barColor,
+                  },
+                ]}
+              />
+            </>
+          )}
+        </View>
       </View>
       <Text style={[styles.td, styles.colCritical, isCritical ? styles.critical : undefined]}>
         {isCritical ? 'Critical' : ''}
@@ -124,7 +149,10 @@ function TaskRow({
 export function SchedulePdfDocument({
   generatedDate,
   projectName,
-  preparedBy,
+  projectLocation,
+  scopeOfWork,
+  preparedByName,
+  preparedByDesignation,
   moduleGroups,
   rangeStart,
   totalDays,
@@ -135,7 +163,10 @@ export function SchedulePdfDocument({
 }: {
   generatedDate: string
   projectName: string
-  preparedBy: string | null
+  projectLocation: string | null
+  scopeOfWork: string | null
+  preparedByName: string | null
+  preparedByDesignation: string | null
   moduleGroups: { module: string; tasks: ScheduleTask[] }[]
   rangeStart: string
   totalDays: number
@@ -149,12 +180,27 @@ export function SchedulePdfDocument({
       <Page size="A4" orientation="landscape" style={styles.page}>
         <View style={styles.header} fixed>
           <Text style={styles.headerTitle}>Project Schedule — Gantt Report</Text>
-          <Text style={styles.headerSubtitle}>{projectName}</Text>
-          <Text style={styles.headerDate}>As of {generatedDate}{preparedBy ? ` · Prepared by ${preparedBy}` : ''}</Text>
+          <Text style={styles.headerDate}>As of {generatedDate}</Text>
         </View>
 
         <View style={styles.footer} fixed>
           <Text render={({ pageNumber, totalPages }) => `(${pageNumber}) of (${totalPages})`} />
+        </View>
+
+        <View style={styles.projectBlock}>
+          <Text style={styles.projectName}>{projectName}</Text>
+          {projectLocation && (
+            <Text style={styles.projectMeta}>
+              <Text style={styles.projectMetaLabel}>Location: </Text>
+              {projectLocation}
+            </Text>
+          )}
+          {scopeOfWork && (
+            <Text style={styles.projectMeta}>
+              <Text style={styles.projectMetaLabel}>Scope of Work: </Text>
+              {scopeOfWork}
+            </Text>
+          )}
         </View>
 
         <View style={styles.statRow}>
@@ -188,7 +234,7 @@ export function SchedulePdfDocument({
                 <Text style={[styles.th, styles.colDate]}>Finish</Text>
                 <Text style={[styles.th, styles.colDur]}>Duration</Text>
                 <Text style={[styles.th, styles.colPct]}>Complete</Text>
-                <Text style={[styles.th, styles.colBar]}>Timeline</Text>
+                <Text style={[styles.th, styles.colBar]}>Timeline (milestones marked)</Text>
                 <Text style={[styles.th, styles.colCritical]}>Path</Text>
               </View>
               {group.tasks.map((task) => (
@@ -206,6 +252,14 @@ export function SchedulePdfDocument({
 
         <View style={styles.endRule} />
         <Text style={styles.endText}>Nothing follows</Text>
+
+        <View style={styles.signatureBlock}>
+          <Text style={styles.sigLabel}>Prepared by:</Text>
+          <View style={styles.sigSpace} />
+          <View style={styles.sigLine} />
+          <Text style={styles.sigName}>{preparedByName ?? '—'}</Text>
+          {preparedByDesignation && <Text style={styles.sigDesignation}>{preparedByDesignation}</Text>}
+        </View>
       </Page>
     </Document>
   )

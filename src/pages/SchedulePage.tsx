@@ -11,6 +11,7 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
+  Info,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { GanttChart } from '@/components/gantt/GanttChart'
@@ -24,6 +25,7 @@ import {
   deleteDependency,
   deleteReport,
   deleteTask,
+  getProjectInfo,
   getReportSignedUrl,
   listDependencies,
   listReports,
@@ -31,10 +33,11 @@ import {
   saveReport,
   setBaselineForAll,
   updateDependency,
+  updateProjectInfo,
   updateTask,
 } from '@/services/scheduleService'
 import { DEPENDENCY_TYPES, DEPENDENCY_TYPE_LABELS } from '@/types'
-import type { DependencyType, ScheduleDependency, ScheduleReport, ScheduleTask } from '@/types'
+import type { DependencyType, ProjectInfo, ScheduleDependency, ScheduleReport, ScheduleTask } from '@/types'
 
 const APP_TITLE = 'XA Gantt & Scheduling'
 const ZOOM_OPTIONS: { value: GanttZoom; label: string }[] = [
@@ -50,12 +53,18 @@ export function SchedulePage() {
   const [tasks, setTasks] = useState<ScheduleTask[]>([])
   const [dependencies, setDependencies] = useState<ScheduleDependency[]>([])
   const [reports, setReports] = useState<ScheduleReport[]>([])
+  const [projectInfo, setProjectInfo] = useState<ProjectInfo>({
+    project_name: null,
+    project_location: null,
+    scope_of_work: null,
+  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [zoom, setZoom] = useState<GanttZoom>('week')
   const [showBaseline, setShowBaseline] = useState(false)
   const [collapsedModules, setCollapsedModules] = useState<Set<string>>(new Set())
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; task?: ScheduleTask } | null>(null)
+  const [showProjectInfoModal, setShowProjectInfoModal] = useState(false)
   const [exporting, setExporting] = useState<'download' | 'save' | null>(null)
   const [showReports, setShowReports] = useState(false)
   const [busyAction, setBusyAction] = useState(false)
@@ -64,10 +73,11 @@ export function SchedulePage() {
     setLoading(true)
     setError('')
     try {
-      const [t, d, r] = await Promise.all([listTasks(), listDependencies(), listReports()])
+      const [t, d, r, p] = await Promise.all([listTasks(), listDependencies(), listReports(), getProjectInfo()])
       setTasks(t)
       setDependencies(d)
       setReports(r)
+      setProjectInfo(p)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load schedule')
     } finally {
@@ -221,8 +231,11 @@ export function SchedulePage() {
     return pdf(
       <SchedulePdfDocument
         generatedDate={generatedDate}
-        projectName={APP_TITLE}
-        preparedBy={user?.full_name ?? null}
+        projectName={projectInfo.project_name || APP_TITLE}
+        projectLocation={projectInfo.project_location}
+        scopeOfWork={projectInfo.scope_of_work}
+        preparedByName={user?.full_name ?? null}
+        preparedByDesignation={user?.designation ?? null}
         moduleGroups={moduleGroups}
         rangeStart={range.startIso}
         totalDays={range.totalDays}
@@ -298,8 +311,18 @@ export function SchedulePage() {
     <div className="space-y-4 pb-24">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-brand-ink">Project Schedule</h1>
-          <p className="text-sm text-brand-slate">Gantt &amp; critical-path view</p>
+          <h1 className="text-xl font-bold text-brand-ink">{projectInfo.project_name || 'Project Schedule'}</h1>
+          <p className="text-sm text-brand-slate">
+            {projectInfo.project_location ? `${projectInfo.project_location} · ` : ''}Gantt &amp; critical-path view
+          </p>
+          {editable && (
+            <button
+              onClick={() => setShowProjectInfoModal(true)}
+              className="mt-1 flex items-center gap-1 text-xs font-semibold text-brand-slate hover:text-brand-teal"
+            >
+              <Info size={12} /> {projectInfo.project_name ? 'Edit project info' : 'Add project info'}
+            </button>
+          )}
         </div>
         {editable && (
           <button
@@ -483,6 +506,102 @@ export function SchedulePage() {
           onDependencyRemoved={(depId) => setDependencies((prev) => prev.filter((d) => d.id !== depId))}
         />
       )}
+
+      {showProjectInfoModal && (
+        <ProjectInfoModal
+          info={projectInfo}
+          busy={busyAction}
+          onClose={() => setShowProjectInfoModal(false)}
+          onSave={async (fields) => {
+            setBusyAction(true)
+            try {
+              await updateProjectInfo(fields)
+              setProjectInfo(fields)
+              setShowProjectInfoModal(false)
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Failed to save project info')
+            } finally {
+              setBusyAction(false)
+            }
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function ProjectInfoModal({
+  info,
+  busy,
+  onClose,
+  onSave,
+}: {
+  info: ProjectInfo
+  busy: boolean
+  onClose: () => void
+  onSave: (fields: ProjectInfo) => Promise<void>
+}) {
+  const [projectName, setProjectName] = useState(info.project_name ?? '')
+  const [projectLocation, setProjectLocation] = useState(info.project_location ?? '')
+  const [scopeOfWork, setScopeOfWork] = useState(info.scope_of_work ?? '')
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-pop">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-bold text-brand-ink">Project info</h2>
+          <button onClick={onClose} className="text-brand-slate hover:text-brand-ink">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="mb-4 text-sm text-brand-slate">Shown on the schedule page and every exported PDF report.</p>
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold text-brand-slate">Project name</span>
+            <input
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold text-brand-slate">Project location</span>
+            <input
+              value={projectLocation}
+              onChange={(e) => setProjectLocation(e.target.value)}
+              className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold text-brand-slate">Scope of work</span>
+            <textarea
+              value={scopeOfWork}
+              onChange={(e) => setScopeOfWork(e.target.value)}
+              rows={3}
+              className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold">
+            Cancel
+          </button>
+          <button
+            onClick={() =>
+              onSave({
+                project_name: projectName.trim() || null,
+                project_location: projectLocation.trim() || null,
+                scope_of_work: scopeOfWork.trim() || null,
+              })
+            }
+            disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg bg-brand-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            Save
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

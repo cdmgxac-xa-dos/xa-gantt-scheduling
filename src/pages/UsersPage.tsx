@@ -15,6 +15,7 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true)
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
+  const [designation, setDesignation] = useState('')
   const [role, setRole] = useState<AppRole>('viewer')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
@@ -22,6 +23,7 @@ export function UsersPage() {
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
+  const [editDesignation, setEditDesignation] = useState('')
   const [editRole, setEditRole] = useState<AppRole>('viewer')
   const [savingEdit, setSavingEdit] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -46,10 +48,11 @@ export function UsersPage() {
     setNotice('')
     setCreating(true)
     try {
-      await createAccount(fullName.trim(), email.trim(), role)
+      await createAccount(fullName.trim(), email.trim(), role, designation)
       setNotice(`${fullName} can now sign in at this app's login page — no password, just their email.`)
       setFullName('')
       setEmail('')
+      setDesignation('')
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create account')
@@ -62,6 +65,7 @@ export function UsersPage() {
     setRowError('')
     setEditingId(u.id)
     setEditName(u.full_name)
+    setEditDesignation(u.designation ?? '')
     setEditRole(u.role)
   }
 
@@ -73,7 +77,7 @@ export function UsersPage() {
     setRowError('')
     setSavingEdit(true)
     try {
-      await updateUser(id, { full_name: editName.trim(), role: editRole })
+      await updateUser(id, { full_name: editName.trim(), role: editRole, designation: editDesignation.trim() || null })
       setEditingId(null)
       await refresh()
     } catch (e) {
@@ -129,6 +133,15 @@ export function UsersPage() {
             />
           </label>
           <label className="block sm:col-span-2">
+            <span className="mb-1 block text-xs font-semibold text-brand-slate">Designation</span>
+            <input
+              value={designation}
+              onChange={(e) => setDesignation(e.target.value)}
+              placeholder="e.g. Project Manager — shown on exported PDFs"
+              className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block sm:col-span-2">
             <span className="mb-1 block text-xs font-semibold text-brand-slate">Role</span>
             <select
               value={role}
@@ -166,10 +179,17 @@ export function UsersPage() {
           <div className="divide-y divide-brand-line">
             {users.map((u) =>
               editingId === u.id ? (
-                <div key={u.id} className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_1fr_auto] sm:items-center">
+                <div key={u.id} className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-center">
                   <input
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Full name"
+                    className="w-full rounded-lg border border-brand-line px-3 py-1.5 text-sm"
+                  />
+                  <input
+                    value={editDesignation}
+                    onChange={(e) => setEditDesignation(e.target.value)}
+                    placeholder="Designation"
                     className="w-full rounded-lg border border-brand-line px-3 py-1.5 text-sm"
                   />
                   <select
@@ -204,7 +224,10 @@ export function UsersPage() {
                 <div key={u.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-brand-ink">{u.full_name}</p>
-                    <p className="truncate text-xs text-brand-slate">{u.email}</p>
+                    <p className="truncate text-xs text-brand-slate">
+                      {u.email}
+                      {u.designation ? ` · ${u.designation}` : ''}
+                    </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-brand-slate">

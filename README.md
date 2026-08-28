@@ -52,13 +52,19 @@ the link" flow as everyone else's.
 
 ## Setup
 
-1. **Run the SQL** in `supabase/01_schema.sql` against the XA DOS (by
-   module) Supabase project's SQL Editor. It's additive and safe to re-run.
-2. **Auth settings** — under Authentication → Providers → Email, turn off
-   "Confirm email" (same reason as the drawing tracker: account creation
-   signs a user up and writes their `gantt_app_users` row in the same
-   request; if email confirmation is required, that insert fails RLS since
-   there's no session yet).
+1. **Run the SQL** in `supabase/01_schema.sql`, then `supabase/02_project_info_and_designation.sql`,
+   against the XA DOS (by module) Supabase project's SQL Editor. Both are
+   additive and safe to re-run.
+2. **Auth settings**:
+   - Authentication → Providers → Email → turn off "Confirm email" (account
+     creation signs a user up and writes their `gantt_app_users` row in the
+     same request; if email confirmation is required, that insert fails RLS
+     since there's no session yet).
+   - Authentication → URL Configuration → Redirect URLs → add this app's
+     deployed origin (e.g. `https://xa-gantt-scheduling.netlify.app/**`).
+     This project's Auth "Site URL" belongs to a different app sharing the
+     same Supabase project — without this entry, every magic link falls
+     back to that other app's URL instead of coming back here.
 3. **Configure the app**:
    ```bash
    cp .env.example .env.local   # fill in the XA DOS project's URL + anon key
@@ -66,9 +72,11 @@ the link" flow as everyone else's.
    npm run dev
    ```
 4. Open the app — since no Editor account exists yet, it shows "Set up the
-   first Editor account." Fill in name + email, then check that inbox for
-   the sign-in link. Once in, use **Users** to add more Editor or Viewer
-   accounts.
+   first Editor account." Fill in name, email, and designation (your job
+   title — shown on the "Prepared by" line of exported PDFs), then check
+   that inbox for the sign-in link. Once in, use **Users** to add more
+   Editor or Viewer accounts, and "Add project info" on the Schedule page
+   to set the project name/location/scope of work shown in the PDF header.
 
 ## Project structure
 
@@ -78,11 +86,12 @@ src/
   components/         SchedulePdfDocument (PDF report)
   context/            AuthContext
   layouts/            AppLayout (top nav)
-  pages/              Login, Schedule (the whole app), Users, NotFound
+  pages/              Login, Schedule (the whole app + Project Info modal), Users, NotFound
   routes/             ProtectedRoute
-  services/           authService, scheduleService
+  services/           authService, scheduleService (incl. project info)
   lib/                supabaseClient, scheduleEngine (CPM date math)
-  types/               Domain model — mirrors supabase/01_schema.sql
+  types/               Domain model — mirrors the supabase/*.sql files
 supabase/
   01_schema.sql        gantt_app_users, gantt_tasks, gantt_dependencies, gantt_reports
+  02_project_info_and_designation.sql   gantt_app_users.designation, gantt_project_info
 ```
