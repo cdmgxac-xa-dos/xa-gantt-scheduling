@@ -57,6 +57,8 @@ export function SchedulePage() {
     project_name: null,
     project_location: null,
     scope_of_work: null,
+    prepared_by_name: null,
+    prepared_by_title: null,
     approved_by_name: null,
     approved_by_title: null,
   })
@@ -236,8 +238,8 @@ export function SchedulePage() {
         projectName={projectInfo.project_name || APP_TITLE}
         projectLocation={projectInfo.project_location}
         scopeOfWork={projectInfo.scope_of_work}
-        preparedByName={user?.full_name ?? null}
-        preparedByDesignation={user?.designation ?? null}
+        preparedByName={projectInfo.prepared_by_name || user?.full_name || null}
+        preparedByDesignation={projectInfo.prepared_by_title || user?.designation || null}
         approvedByName={projectInfo.approved_by_name}
         approvedByTitle={projectInfo.approved_by_title}
         moduleGroups={moduleGroups}
@@ -552,6 +554,8 @@ function ProjectInfoModal({
   const [projectName, setProjectName] = useState(info.project_name ?? '')
   const [projectLocation, setProjectLocation] = useState(info.project_location ?? '')
   const [scopeOfWork, setScopeOfWork] = useState(info.scope_of_work ?? '')
+  const [preparedByName, setPreparedByName] = useState(info.prepared_by_name ?? '')
+  const [preparedByTitle, setPreparedByTitle] = useState(info.prepared_by_title ?? '')
   const [approvedByName, setApprovedByName] = useState(info.approved_by_name ?? '')
   const [approvedByTitle, setApprovedByTitle] = useState(info.approved_by_title ?? '')
 
@@ -593,6 +597,31 @@ function ProjectInfoModal({
           </label>
           <div className="border-t border-brand-line pt-3">
             <p className="mb-2 text-xs font-semibold text-brand-slate">
+              "Prepared by" signature block (bottom-left of the PDF)
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-slate">Name</span>
+                <input
+                  value={preparedByName}
+                  onChange={(e) => setPreparedByName(e.target.value)}
+                  placeholder="e.g. Christian Mendoza"
+                  className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-slate">Title / Designation</span>
+                <input
+                  value={preparedByTitle}
+                  onChange={(e) => setPreparedByTitle(e.target.value)}
+                  placeholder="e.g. Project Manager"
+                  className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+                />
+              </label>
+            </div>
+          </div>
+          <div className="border-t border-brand-line pt-3">
+            <p className="mb-2 text-xs font-semibold text-brand-slate">
               "Approved by" signature block (bottom-right of the PDF)
             </p>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -627,6 +656,8 @@ function ProjectInfoModal({
                 project_name: projectName.trim() || null,
                 project_location: projectLocation.trim() || null,
                 scope_of_work: scopeOfWork.trim() || null,
+                prepared_by_name: preparedByName.trim() || null,
+                prepared_by_title: preparedByTitle.trim() || null,
                 approved_by_name: approvedByName.trim() || null,
                 approved_by_title: approvedByTitle.trim() || null,
               })

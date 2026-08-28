@@ -72,13 +72,14 @@ the link" flow as everyone else's.
    npm run dev
    ```
 4. Open the app — since no Editor account exists yet, it shows "Set up the
-   first Editor account." Fill in name, email, and designation (your job
-   title — shown on the "Prepared by" line of exported PDFs), then check
+   first Editor account." Fill in name, email, and designation, then check
    that inbox for the sign-in link. Once in, use **Users** to add more
    Editor or Viewer accounts, and "Add project info" on the Schedule page
-   to set the project name/location/scope of work (PDF header) and the
-   "Approved by" name/title (PDF bottom-right signature block — a fixed
-   name, not tied to any account, e.g. a client-side approver).
+   to set the project name/location/scope of work (PDF header), the
+   "Prepared by" name/title (PDF bottom-left signature block), and the
+   "Approved by" name/title (PDF bottom-right signature block). Both
+   signature blocks are fixed values you set once, independent of whoever
+   is logged in when the PDF is generated.
 
 ## Project structure
 
@@ -97,4 +98,5 @@ supabase/
   01_schema.sql        gantt_app_users, gantt_tasks, gantt_dependencies, gantt_reports
   02_project_info_and_designation.sql   gantt_app_users.designation, gantt_project_info
   03_approved_by.sql   gantt_project_info.approved_by_name / approved_by_title
+  04_prepared_by.sql   gantt_project_info.prepared_by_name / prepared_by_title
 ```

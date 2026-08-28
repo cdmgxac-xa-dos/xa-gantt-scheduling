@@ -70,8 +70,10 @@ const styles = StyleSheet.create({
   },
   endRule: { marginTop: 20, borderTopWidth: 1, borderTopColor: '#0F172A' },
   endText: { marginTop: 6, textAlign: 'right', fontSize: 9, fontFamily: 'Helvetica-BoldOblique', color: '#334155' },
-  signatureBlock: { position: 'absolute', left: 28, bottom: 24, width: 200 },
-  signatureBlockRight: { position: 'absolute', right: 28, bottom: 24, width: 200, alignItems: 'flex-end' },
+  // bottom: 58, not 24 — the page footer ("(n) of (n)") sits at bottom: 16,
+  // and 24 put barely 8pt between the two, enough to visibly overlap.
+  signatureBlock: { position: 'absolute', left: 28, bottom: 58, width: 200 },
+  signatureBlockRight: { position: 'absolute', right: 28, bottom: 58, width: 200, alignItems: 'flex-end' },
   sigLabel: { fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#0F172A', marginBottom: 4 },
   sigSpace: { height: 34 },
   sigLine: { width: 180, borderTopWidth: 1, borderTopColor: '#0F172A' },

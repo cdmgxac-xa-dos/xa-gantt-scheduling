@@ -6,7 +6,9 @@ const REPORTS_BUCKET = 'gantt-reports'
 export async function getProjectInfo(): Promise<ProjectInfo> {
   const { data, error } = await requireSupabase()
     .from('gantt_project_info')
-    .select('project_name, project_location, scope_of_work, approved_by_name, approved_by_title')
+    .select(
+      'project_name, project_location, scope_of_work, prepared_by_name, prepared_by_title, approved_by_name, approved_by_title'
+    )
     .eq('id', true)
     .single()
   if (error) throw error

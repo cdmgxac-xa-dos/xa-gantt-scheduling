@@ -17,6 +17,8 @@ export interface ProjectInfo {
   project_name: string | null
   project_location: string | null
   scope_of_work: string | null
+  prepared_by_name: string | null
+  prepared_by_title: string | null
   approved_by_name: string | null
   approved_by_title: string | null
 }
