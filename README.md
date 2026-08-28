@@ -52,9 +52,9 @@ the link" flow as everyone else's.
 
 ## Setup
 
-1. **Run the SQL** in `supabase/01_schema.sql`, then `supabase/02_project_info_and_designation.sql`,
-   against the XA DOS (by module) Supabase project's SQL Editor. Both are
-   additive and safe to re-run.
+1. **Run the SQL**, in order, in the XA DOS (by module) Supabase project's
+   SQL Editor: `supabase/01_schema.sql`, `02_project_info_and_designation.sql`,
+   `03_approved_by.sql`. All additive and safe to re-run.
 2. **Auth settings**:
    - Authentication → Providers → Email → turn off "Confirm email" (account
      creation signs a user up and writes their `gantt_app_users` row in the
@@ -76,7 +76,9 @@ the link" flow as everyone else's.
    title — shown on the "Prepared by" line of exported PDFs), then check
    that inbox for the sign-in link. Once in, use **Users** to add more
    Editor or Viewer accounts, and "Add project info" on the Schedule page
-   to set the project name/location/scope of work shown in the PDF header.
+   to set the project name/location/scope of work (PDF header) and the
+   "Approved by" name/title (PDF bottom-right signature block — a fixed
+   name, not tied to any account, e.g. a client-side approver).
 
 ## Project structure
 
@@ -94,4 +96,5 @@ src/
 supabase/
   01_schema.sql        gantt_app_users, gantt_tasks, gantt_dependencies, gantt_reports
   02_project_info_and_designation.sql   gantt_app_users.designation, gantt_project_info
+  03_approved_by.sql   gantt_project_info.approved_by_name / approved_by_title
 ```

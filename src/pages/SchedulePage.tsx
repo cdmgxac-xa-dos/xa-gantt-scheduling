@@ -57,6 +57,8 @@ export function SchedulePage() {
     project_name: null,
     project_location: null,
     scope_of_work: null,
+    approved_by_name: null,
+    approved_by_title: null,
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -236,6 +238,8 @@ export function SchedulePage() {
         scopeOfWork={projectInfo.scope_of_work}
         preparedByName={user?.full_name ?? null}
         preparedByDesignation={user?.designation ?? null}
+        approvedByName={projectInfo.approved_by_name}
+        approvedByTitle={projectInfo.approved_by_title}
         moduleGroups={moduleGroups}
         rangeStart={range.startIso}
         totalDays={range.totalDays}
@@ -544,6 +548,8 @@ function ProjectInfoModal({
   const [projectName, setProjectName] = useState(info.project_name ?? '')
   const [projectLocation, setProjectLocation] = useState(info.project_location ?? '')
   const [scopeOfWork, setScopeOfWork] = useState(info.scope_of_work ?? '')
+  const [approvedByName, setApprovedByName] = useState(info.approved_by_name ?? '')
+  const [approvedByTitle, setApprovedByTitle] = useState(info.approved_by_title ?? '')
 
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
@@ -581,6 +587,31 @@ function ProjectInfoModal({
               className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
             />
           </label>
+          <div className="border-t border-brand-line pt-3">
+            <p className="mb-2 text-xs font-semibold text-brand-slate">
+              "Approved by" signature block (bottom-right of the PDF)
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-slate">Name</span>
+                <input
+                  value={approvedByName}
+                  onChange={(e) => setApprovedByName(e.target.value)}
+                  placeholder="e.g. Peko Li"
+                  className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-brand-slate">Title / Company</span>
+                <input
+                  value={approvedByTitle}
+                  onChange={(e) => setApprovedByTitle(e.target.value)}
+                  placeholder="e.g. Guangdong Xinhe Aluminum Co., Ltd."
+                  className="w-full rounded-lg border border-brand-line px-3 py-2 text-sm"
+                />
+              </label>
+            </div>
+          </div>
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold">
@@ -592,6 +623,8 @@ function ProjectInfoModal({
                 project_name: projectName.trim() || null,
                 project_location: projectLocation.trim() || null,
                 scope_of_work: scopeOfWork.trim() || null,
+                approved_by_name: approvedByName.trim() || null,
+                approved_by_title: approvedByTitle.trim() || null,
               })
             }
             disabled={busy}

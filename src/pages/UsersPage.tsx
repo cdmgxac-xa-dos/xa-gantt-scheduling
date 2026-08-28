@@ -10,7 +10,7 @@ const ROLE_LABEL: Record<AppRole, string> = {
 }
 
 export function UsersPage() {
-  const { user: currentUser } = useAuth()
+  const { user: currentUser, refreshUser } = useAuth()
   const [users, setUsers] = useState<AppUser[]>([])
   const [loading, setLoading] = useState(true)
   const [fullName, setFullName] = useState('')
@@ -80,6 +80,10 @@ export function UsersPage() {
       await updateUser(id, { full_name: editName.trim(), role: editRole, designation: editDesignation.trim() || null })
       setEditingId(null)
       await refresh()
+      // Editing your own row updates the database, but AuthContext's cached
+      // `user` (used everywhere — nav, PDF export) doesn't know that unless
+      // told to re-fetch, so it'd keep showing stale name/designation/role.
+      if (id === currentUser?.id) await refreshUser()
     } catch (e) {
       setRowError(e instanceof Error ? e.message : 'Could not update account')
     } finally {

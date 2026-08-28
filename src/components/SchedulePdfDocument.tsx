@@ -69,6 +69,7 @@ const styles = StyleSheet.create({
   endRule: { marginTop: 20, borderTopWidth: 1, borderTopColor: '#0F172A' },
   endText: { marginTop: 6, textAlign: 'right', fontSize: 9, fontFamily: 'Helvetica-BoldOblique', color: '#334155' },
   signatureBlock: { position: 'absolute', left: 28, bottom: 24, width: 200 },
+  signatureBlockRight: { position: 'absolute', right: 28, bottom: 24, width: 200, alignItems: 'flex-end' },
   sigLabel: { fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#0F172A', marginBottom: 4 },
   sigSpace: { height: 34 },
   sigLine: { width: 180, borderTopWidth: 1, borderTopColor: '#0F172A' },
@@ -153,6 +154,8 @@ export function SchedulePdfDocument({
   scopeOfWork,
   preparedByName,
   preparedByDesignation,
+  approvedByName,
+  approvedByTitle,
   moduleGroups,
   rangeStart,
   totalDays,
@@ -167,6 +170,8 @@ export function SchedulePdfDocument({
   scopeOfWork: string | null
   preparedByName: string | null
   preparedByDesignation: string | null
+  approvedByName: string | null
+  approvedByTitle: string | null
   moduleGroups: { module: string; tasks: ScheduleTask[] }[]
   rangeStart: string
   totalDays: number
@@ -260,6 +265,16 @@ export function SchedulePdfDocument({
           <Text style={styles.sigName}>{preparedByName ?? '—'}</Text>
           {preparedByDesignation && <Text style={styles.sigDesignation}>{preparedByDesignation}</Text>}
         </View>
+
+        {approvedByName && (
+          <View style={styles.signatureBlockRight}>
+            <Text style={styles.sigLabel}>Approved by:</Text>
+            <View style={styles.sigSpace} />
+            <View style={styles.sigLine} />
+            <Text style={styles.sigName}>{approvedByName}</Text>
+            {approvedByTitle && <Text style={styles.sigDesignation}>{approvedByTitle}</Text>}
+          </View>
+        )}
       </Page>
     </Document>
   )
