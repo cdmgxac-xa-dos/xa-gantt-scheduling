@@ -79,13 +79,19 @@ reports into one migrated `gantt_projects` row automatically.
 `gantt_project_info` is left in place, unused, on purpose (nothing
 destructive to roll back).
 
-**Rollback path**: this was built entirely on branch
-`claude/gantt-md-comparison-9me7vm`, not merged to `main`, and deployed
-only to a Netlify branch/preview URL — production
-(https://xa-gantt-scheduling.netlify.app) keeps serving the pre-v1.1 build
-from `main` until the user says to merge. The Supabase migration is live
-either way (additive, and `gantt_project_info`/old columns are untouched),
-so `main`'s old code keeps working unchanged against the upgraded schema.
+**Status: live.** Built on branch `claude/gantt-md-comparison-9me7vm`, the
+user tested it there (Netlify has no separate preview mode for this site —
+see the deploy-site gotcha below, so "testing on branch" actually meant
+testing directly on production), approved it, then it was fast-forward
+merged into `main` (`main` was untouched since `2b625c7`, so this was a
+clean fast-forward, no merge commit) and redeployed. `main` and production
+now both serve v1.1.
+
+**Rollback path if ever needed**: `git revert` (or reset to `2b625c7`,
+the last pre-v1.1 commit) on `main`, then redeploy the same way. The
+Supabase migration doesn't need reverting to do this — it's additive,
+`gantt_project_info`/old columns are untouched, so pre-v1.1 code keeps
+working unchanged against the upgraded schema either way.
 
 ## Hard-learned rules for this codebase
 
@@ -142,6 +148,14 @@ so `main`'s old code keeps working unchanged against the upgraded schema.
   (`origin_bad_gateway`) on this call has been consistently transient in
   this session; wait ~15-20s and retry (a fresh call, since the token in a
   failed response is unusable/expired by the time you'd reuse it).
+  **There is no draft/preview mode for this site** — the returned command
+  deploys straight to the production URL every time, regardless of which
+  git branch is checked out locally, and ignores `--help` (still deploys
+  immediately rather than printing usage). Confirmed the hard way: running
+  it from the v1.1 branch before it was merged put v1.1 live on production
+  while `main` still had the old code. If a non-production check is ever
+  needed, don't rely on this tool for it — there's nothing to add here to
+  fix that, it's just how this site's deploy is wired.
 
 ## Where things are
 
