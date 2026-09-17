@@ -65,6 +65,7 @@ import type {
 
 const APP_TITLE = 'XA Gantt & Scheduling'
 const LAST_PROJECT_KEY = 'xa-gantt:last-project-id'
+const CHUNK_RELOAD_KEY = 'xa-gantt:chunk-reload-attempted'
 const ZOOM_OPTIONS: { value: GanttZoom; label: string }[] = [
   { value: 'day', label: 'Day' },
   { value: 'week', label: 'Week' },
@@ -355,10 +356,35 @@ export function SchedulePage() {
     URL.revokeObjectURL(url)
   }
 
+  // Each deploy gives its code-split chunks new hashed filenames. A tab left
+  // open across a deploy still holds the old main bundle in memory, which
+  // then tries to dynamically import an old chunk that the new deploy no
+  // longer serves — failing with "Failed to fetch dynamically imported
+  // module" instead of the feature actually being broken. The fix is just a
+  // page reload (it re-fetches the current bundle), so do that once
+  // automatically instead of showing the user a raw error for something a
+  // refresh solves. sessionStorage caps it at one attempt per tab so a
+  // genuine, unrelated load failure doesn't reload forever.
+  async function withChunkReload<T>(loader: () => Promise<T>): Promise<T> {
+    try {
+      const result = await loader()
+      sessionStorage.removeItem(CHUNK_RELOAD_KEY)
+      return result
+    } catch (e) {
+      const isChunkLoadError = e instanceof Error && /dynamically imported module/i.test(e.message)
+      if (isChunkLoadError && !sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
+        sessionStorage.setItem(CHUNK_RELOAD_KEY, '1')
+        window.location.reload()
+        return new Promise<T>(() => {}) // page is reloading; never resolve
+      }
+      throw e
+    }
+  }
+
   async function buildPdfBlob() {
     const [{ pdf }, { SchedulePdfDocument }] = await Promise.all([
-      import('@react-pdf/renderer'),
-      import('@/components/SchedulePdfDocument'),
+      withChunkReload(() => import('@react-pdf/renderer')),
+      withChunkReload(() => import('@/components/SchedulePdfDocument')),
     ])
     const moduleGroups = buildModuleGroups()
     const range = computePrintRange(tasks, todayIso())
@@ -434,7 +460,7 @@ export function SchedulePage() {
   async function handleExportExcel() {
     setExporting('excel')
     try {
-      const { buildScheduleWorkbookBlob } = await import('@/lib/scheduleExcelExport')
+      const { buildScheduleWorkbookBlob } = await withChunkReload(() => import('@/lib/scheduleExcelExport'))
       const moduleGroups = buildModuleGroups()
       const range = computePrintRange(tasks, todayIso())
       const generatedDate = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
