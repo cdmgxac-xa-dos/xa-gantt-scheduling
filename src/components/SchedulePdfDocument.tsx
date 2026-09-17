@@ -9,13 +9,22 @@ import { buildDayCells, buildMonthGroups, type DayCell, type GanttZoom } from '@
 // pt coordinates (SVG path data isn't percentage-based like View widths),
 // and this document is always rendered at this page size.
 const PAGE_CONTENT_WIDTH_PT = 841.89 - 28 * 2
-const CHART_NAME_COL_WIDTH_PT = PAGE_CONTENT_WIDTH_PT * 0.22
-const CHART_COL_WIDTH_PT = PAGE_CONTENT_WIDTH_PT * 0.78
-// Chart-page rows get an explicit height (rather than the content-driven
-// auto height Page 1's rows use) so every row's vertical position is known
-// in advance — required to draw dependency lines, which need to reach an
-// exact y for a task that may be several modules down the page.
-const CHART_ROW_HEIGHT = 24
+const CHART_NAME_COL_WIDTH_PT = PAGE_CONTENT_WIDTH_PT * 0.24
+const CHART_COL_WIDTH_PT = PAGE_CONTENT_WIDTH_PT * 0.76
+// Chart-page rows get an explicit, precomputed height (rather than the
+// content-driven auto height Page 1's rows use) so every row's vertical
+// position is known in advance — required to draw dependency lines, which
+// need to reach an exact y for a task that may be several modules down the
+// page. A single-line name fits CHART_ROW_MIN_HEIGHT; a longer name that
+// wraps (same full, untruncated text as Page 1 — see chartRowHeight below)
+// grows the row by CHART_ROW_LINE_HEIGHT per extra line instead of being
+// cut off.
+const CHART_ROW_MIN_HEIGHT = 24
+const CHART_ROW_LINE_HEIGHT = 9
+// How many characters fit on one line of the name column at its font size —
+// used only to estimate wrapped line count for row-height math, not to
+// truncate; react-pdf wraps the actual text on its own.
+const CHART_NAME_CHARS_PER_LINE = 36
 const MODULE_TITLE_BLOCK_HEIGHT = 26
 
 const styles = StyleSheet.create({
@@ -65,9 +74,10 @@ const styles = StyleSheet.create({
   table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 4, overflow: 'hidden' },
   tHeadRow: { flexDirection: 'row', backgroundColor: '#F1F5F9' },
   tRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center' },
-  // Same as tRow, but a fixed height instead of content-driven — see
-  // CHART_ROW_HEIGHT above for why the chart page's rows need one.
-  chartRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center', height: CHART_ROW_HEIGHT },
+  // Same as tRow, but with an explicit height passed per-row inline (see
+  // chartRowHeight) instead of content-driven — CHART_ROW_MIN_HEIGHT above
+  // explains why the chart page's rows need a precomputed height.
+  chartRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#E2E8F0', alignItems: 'center' },
   th: { fontSize: 7, fontFamily: 'Helvetica-Bold', color: '#475569', padding: 4, textTransform: 'uppercase' },
   td: { fontSize: 7.5, padding: 4, color: '#0F172A' },
   colCode: { width: '8%' },
@@ -77,8 +87,8 @@ const styles = StyleSheet.create({
   colPct: { width: '9%', textAlign: 'center' },
   colVariance: { width: '11%', textAlign: 'center' },
   colCritical: { width: '12%', textAlign: 'center' },
-  colNameChart: { width: '22%' },
-  colBarChart: { width: '78%', paddingVertical: 5 },
+  colNameChart: { width: '24%' },
+  colBarChart: { width: '76%', paddingVertical: 5 },
   critical: { color: '#DC2626', fontFamily: 'Helvetica-Bold' },
   delayedVariance: { color: '#DC2626', fontFamily: 'Helvetica-Bold' },
   // Fixed, page-repeating title + date axis for the chart page — title on
@@ -99,9 +109,9 @@ const styles = StyleSheet.create({
   // so they start at the same top edge, instead of "Activity" trailing
   // behind a taller two-row axis block.
   axisRow: { flexDirection: 'row', marginTop: 8, borderBottomWidth: 1, borderBottomColor: '#CBD5E1' },
-  axisNameCol: { width: '22%' },
+  axisNameCol: { width: '24%' },
   axisNameLabel: { fontSize: 7, fontFamily: 'Helvetica-Bold', color: '#475569', textTransform: 'uppercase' },
-  axisChartCol: { width: '78%' },
+  axisChartCol: { width: '76%' },
   axisMonthRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
   axisMonthCell: {
     fontSize: 7,
@@ -156,14 +166,22 @@ function pct(numerator: number, denominator: number): number {
   return denominator > 0 ? Math.max(0, Math.min(100, (numerator / denominator) * 100)) : 0
 }
 
-// This react-pdf version has no numberOfLines/line-clamp support, so a long
-// task name would otherwise wrap to 2+ lines and grow that row taller than
-// CHART_ROW_HEIGHT — breaking the fixed-height assumption DependencyLines
-// relies on to know every row's y in advance. 36 chars is a conservative fit
-// for the ~22%-wide name column at this font size even with wide characters.
-function truncateForChartRow(name: string): string {
-  const maxChars = 36
-  return name.length > maxChars ? `${name.slice(0, maxChars - 1).trimEnd()}…` : name
+function chartRowLabel(task: ScheduleTask): string {
+  return task.activity_code ? `${task.activity_code} ${task.name}` : task.name
+}
+
+// react-pdf has no numberOfLines/line-clamp, but it does wrap Text content
+// on its own — so a long name renders in full here, same as Page 1's text
+// table, instead of being cut off. What's missing is layout feedback: since
+// DependencyLines and DataDateLine need every row's y position *before* the
+// page renders (to draw an SVG overlay on top of it), each row's height has
+// to be predicted rather than measured. This estimates wrapped line count
+// from character length — CHART_NAME_CHARS_PER_LINE is a conservative
+// one-line capacity for the name column's width/font — and grows the row
+// by CHART_ROW_LINE_HEIGHT per extra predicted line.
+function chartRowHeight(task: ScheduleTask): number {
+  const lines = Math.max(1, Math.ceil(chartRowLabel(task).length / CHART_NAME_CHARS_PER_LINE))
+  return lines <= 1 ? CHART_ROW_MIN_HEIGHT : CHART_ROW_MIN_HEIGHT + (lines - 1) * CHART_ROW_LINE_HEIGHT
 }
 
 // The PDF page has a fixed, non-scrolling width, and the print range is now
@@ -402,10 +420,8 @@ function ChartRow({
     : 0
 
   return (
-    <View style={styles.chartRow}>
-      <Text style={[styles.td, styles.colNameChart]}>
-        {truncateForChartRow(task.activity_code ? `${task.activity_code} ${task.name}` : task.name)}
-      </Text>
+    <View style={[styles.chartRow, { height: chartRowHeight(task) }]}>
+      <Text style={[styles.td, styles.colNameChart]}>{chartRowLabel(task)}</Text>
       <View style={[styles.td, styles.colBarChart]}>
         <View style={styles.barTrack}>
           {hasBaseline && (
@@ -451,7 +467,7 @@ function computeChartBodyHeight(moduleGroups: { module: string; tasks: ScheduleT
   let cursorY = 0
   for (const group of moduleGroups) {
     cursorY += MODULE_TITLE_BLOCK_HEIGHT + 1 // title block + table's top border
-    cursorY += group.tasks.length * CHART_ROW_HEIGHT
+    for (const task of group.tasks) cursorY += chartRowHeight(task)
     cursorY += 1 // table's bottom border
   }
   return cursorY
@@ -487,12 +503,13 @@ function DataDateLine({
 
 /** Predecessor→successor connector lines over the chart's bars — the same
  *  elbow-with-arrowhead the web Gantt draws for dependency links. Every row's
- *  y is known in advance (module title + fixed-height rows, both constants
- *  above), which is what makes drawing a line across module boundaries
- *  possible without access to the PDF renderer's own layout pass. Confined
- *  to whichever page this renders on — a link into a task pushed onto a
- *  later page (an overflowing report) won't be connected, a fixed-page-size
- *  limitation with no photo-realistic alternative in a printed report. */
+ *  y is known in advance (module title height plus each row's predicted
+ *  chartRowHeight, summed the same way ChartRow itself is laid out), which
+ *  is what makes drawing a line across module boundaries possible without
+ *  access to the PDF renderer's own layout pass. Confined to whichever page
+ *  this renders on — a link into a task pushed onto a later page (an
+ *  overflowing report) won't be connected, a fixed-page-size limitation with
+ *  no photo-realistic alternative in a printed report. */
 function DependencyLines({
   moduleGroups,
   dependencies,
@@ -510,9 +527,10 @@ function DependencyLines({
   for (const group of moduleGroups) {
     cursorY += MODULE_TITLE_BLOCK_HEIGHT + 1 // title block + table's top border
     for (const task of group.tasks) {
+      const h = chartRowHeight(task)
       taskById.set(task.id, task)
-      yById.set(task.id, cursorY + CHART_ROW_HEIGHT / 2)
-      cursorY += CHART_ROW_HEIGHT
+      yById.set(task.id, cursorY + h / 2)
+      cursorY += h
     }
     cursorY += 1 // table's bottom border
   }
