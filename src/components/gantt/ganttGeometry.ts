@@ -33,6 +33,30 @@ export function computeTimelineRange(tasks: ScheduleTask[], todayIso: string): T
   return { startIso: minIso, totalDays: diffDays(minIso, maxIso) + 1 }
 }
 
+// For a printed/exported report the page has a fixed, non-scrolling width,
+// so — unlike the web chart, which can always show "today" plus lookahead
+// because the user can scroll — the axis should tightly fit the tasks that
+// actually exist rather than a today-anchored minimum window. A short pad on
+// each end keeps bars from touching the chart's edges.
+export function computePrintRange(tasks: ScheduleTask[], todayIso: string): TimelineRange {
+  if (tasks.length === 0) {
+    const startIso = addDays(todayIso, -2)
+    const endIso = addDays(todayIso, 10)
+    return { startIso, totalDays: diffDays(startIso, endIso) + 1 }
+  }
+  let minIso = tasks[0].start_date
+  let maxIso = tasks[0].end_date
+  for (const t of tasks) {
+    if (t.start_date < minIso) minIso = t.start_date
+    if (t.end_date > maxIso) maxIso = t.end_date
+    if (t.baseline_start && t.baseline_start < minIso) minIso = t.baseline_start
+    if (t.baseline_end && t.baseline_end > maxIso) maxIso = t.baseline_end
+  }
+  minIso = addDays(minIso, -2)
+  maxIso = addDays(maxIso, 3)
+  return { startIso: minIso, totalDays: diffDays(minIso, maxIso) + 1 }
+}
+
 export function xForIso(range: TimelineRange, iso: string, dayWidth: number): number {
   return diffDays(range.startIso, iso) * dayWidth
 }
