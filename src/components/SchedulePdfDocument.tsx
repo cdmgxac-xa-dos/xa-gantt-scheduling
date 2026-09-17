@@ -228,8 +228,15 @@ function buildWeekOfMonthGroups(cells: DayCell[]): { label: string; startIndex: 
 function ChartLegend({ hasBaseline, hasDataDate }: { hasBaseline: boolean; hasDataDate: boolean }) {
   return (
     <View style={styles.legendRow}>
+      {/* Matches ChartRow's actual two-layer bar: a light tinted track spans
+          the task's full scheduled duration ("Current schedule"), and a
+          solid overlay sized to percent_complete sits on top of it
+          ("Progress") — at 100% complete the overlay covers the whole bar,
+          so it's the solid swatch, not the light one, that then fills it
+          entirely. These two swatches used to be swapped, which made a
+          fully-progressed bar read as "Current schedule" instead. */}
       <View style={styles.legendItem}>
-        <View style={[styles.legendSwatch, { backgroundColor: '#0E7C86' }]} />
+        <View style={[styles.legendSwatch, { backgroundColor: '#ECFEFF', borderWidth: 1, borderColor: '#0E7C86' }]} />
         <Text style={styles.legendLabel}>Current schedule</Text>
       </View>
       {hasBaseline && (
@@ -247,7 +254,7 @@ function ChartLegend({ hasBaseline, hasDataDate }: { hasBaseline: boolean; hasDa
         <Text style={styles.legendLabel}>Critical path</Text>
       </View>
       <View style={styles.legendItem}>
-        <View style={[styles.legendSwatch, { backgroundColor: '#0E7C86', opacity: 0.4 }]} />
+        <View style={[styles.legendSwatch, { backgroundColor: '#0E7C86' }]} />
         <Text style={styles.legendLabel}>Progress</Text>
       </View>
       {hasDataDate && (
