@@ -1,8 +1,15 @@
-import { Document, Page, View, Text, StyleSheet, Svg, Path, Polygon } from '@react-pdf/renderer'
+import { Document, Page, View, Text, StyleSheet, Svg, Path, Polygon, Font } from '@react-pdf/renderer'
 import type { ScheduleDependency, ScheduleHealth, ScheduleTask } from '@/types'
 import { SCHEDULE_HEALTH_LABELS } from '@/types'
 import { diffDays, durationDays, taskBaselineVarianceDays } from '@/lib/scheduleEngine'
 import { buildDayCells, buildMonthGroups, type DayCell, type GanttZoom } from '@/components/gantt/ganttGeometry'
+
+// react-pdf hyphenates any word that doesn't fit its line by default (e.g.
+// "location" -> "loca-" / "tion"), which reads as a rendering glitch rather
+// than intentional line breaking. Registering a callback that returns the
+// word as its own single "syllable" tells it there are no valid break
+// points, so it wraps at word boundaries only — same as Page 1's table text.
+Font.registerHyphenationCallback((word) => [word])
 
 // A4 landscape is 841.89 x 595.28pt; content width after the page's 28pt
 // horizontal padding on each side. Fixed because dependency lines need real
@@ -186,18 +193,18 @@ function chartRowHeight(task: ScheduleTask): number {
 
 // The PDF page has a fixed, non-scrolling width, and the print range is now
 // already tightly fit to the project's actual task dates (see
-// computePrintRange), not a fixed multi-month window. So the axis tick
-// density follows the same day/week/month choice as the web chart's zoom
-// picker: "day" labels every day, "week" labels each Monday, and "month"
-// groups into week-of-month bands (1-5) instead of individual day ticks.
-// AXIS_DAILY_TICKS_MAX_DAYS is only a safety net for "day" zoom on an
-// unusually long schedule, where every-day labels would overlap — it falls
-// back to Monday-only ticks past that length.
+// computePrintRange), not a fixed multi-month window. "Month" zoom is a
+// deliberate compressed overview, so it always groups into week-of-month
+// bands (1-5) — see useWeekNumbers below. For "day"/"week" zoom, prefer
+// showing every individual date whenever the (now-tight) range is short
+// enough to fit them legibly, rather than only ever labeling Mondays: a
+// project spanning a couple of weeks reads better with real dates than with
+// two or three week-start ticks. AXIS_DAILY_TICKS_MAX_DAYS is where that
+// stops fitting — past it, falls back to Monday-only ticks.
 const AXIS_DAILY_TICKS_MAX_DAYS = 40
 
-function shouldLabelDay(cell: DayCell, zoom: GanttZoom, totalDays: number): boolean {
-  if (zoom === 'day') return totalDays <= AXIS_DAILY_TICKS_MAX_DAYS || cell.weekday === 1
-  return cell.weekday === 1
+function shouldLabelDay(cell: DayCell, totalDays: number): boolean {
+  return totalDays <= AXIS_DAILY_TICKS_MAX_DAYS || cell.weekday === 1
 }
 
 /** Groups day cells into week-of-month bands (e.g. "1", "2", "3"...), resetting at each month boundary. */
@@ -300,7 +307,7 @@ function ChartPageHeader({
                 ))
               : cells.map((c) => (
                   <Text key={c.iso} style={[styles.axisTickCell, { width: `${pct(1, totalDays)}%` }]}>
-                    {shouldLabelDay(c, zoom, totalDays) ? c.dayOfMonth : ''}
+                    {shouldLabelDay(c, totalDays) ? c.dayOfMonth : ''}
                   </Text>
                 ))}
           </View>
