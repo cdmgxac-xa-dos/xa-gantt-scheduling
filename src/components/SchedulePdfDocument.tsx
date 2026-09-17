@@ -2,7 +2,7 @@ import { Document, Page, View, Text, StyleSheet, Svg, Path, Polygon } from '@rea
 import type { ScheduleDependency, ScheduleHealth, ScheduleTask } from '@/types'
 import { SCHEDULE_HEALTH_LABELS } from '@/types'
 import { diffDays, durationDays, taskBaselineVarianceDays } from '@/lib/scheduleEngine'
-import { buildDayCells, buildMonthGroups, type DayCell } from '@/components/gantt/ganttGeometry'
+import { buildDayCells, buildMonthGroups, type DayCell, type GanttZoom } from '@/components/gantt/ganttGeometry'
 
 // A4 landscape is 841.89 x 595.28pt; content width after the page's 28pt
 // horizontal padding on each side. Fixed because dependency lines need real
@@ -166,18 +166,20 @@ function truncateForChartRow(name: string): string {
   return name.length > maxChars ? `${name.slice(0, maxChars - 1).trimEnd()}…` : name
 }
 
-// The PDF page has a fixed, non-scrolling width, so — unlike the web chart's
-// day/week/month zoom picker — the whole project's day range must always fit
-// across it at once. These thresholds pick a tick density that stays legible
-// at that fixed width: below ~40 days there's room to label every day; up to
-// ~120 days only Mondays are labeled to avoid the numbers overlapping; past
-// that, day-level ticks would be illegibly cramped even at weekly spacing, so
-// the axis switches to labeling each week-of-month (1-5) instead.
-const AXIS_MONTH_TIER_MIN_DAYS = 120
+// The PDF page has a fixed, non-scrolling width, and the print range is now
+// already tightly fit to the project's actual task dates (see
+// computePrintRange), not a fixed multi-month window. So the axis tick
+// density follows the same day/week/month choice as the web chart's zoom
+// picker: "day" labels every day, "week" labels each Monday, and "month"
+// groups into week-of-month bands (1-5) instead of individual day ticks.
+// AXIS_DAILY_TICKS_MAX_DAYS is only a safety net for "day" zoom on an
+// unusually long schedule, where every-day labels would overlap — it falls
+// back to Monday-only ticks past that length.
 const AXIS_DAILY_TICKS_MAX_DAYS = 40
 
-function shouldLabelDay(cell: DayCell, totalDays: number): boolean {
-  return totalDays <= AXIS_DAILY_TICKS_MAX_DAYS || cell.weekday === 1
+function shouldLabelDay(cell: DayCell, zoom: GanttZoom, totalDays: number): boolean {
+  if (zoom === 'day') return totalDays <= AXIS_DAILY_TICKS_MAX_DAYS || cell.weekday === 1
+  return cell.weekday === 1
 }
 
 /** Groups day cells into week-of-month bands (e.g. "1", "2", "3"...), resetting at each month boundary. */
@@ -237,18 +239,20 @@ function ChartPageHeader({
   projectName,
   rangeStart,
   totalDays,
+  zoom,
   hasBaseline,
   hasDataDate,
 }: {
   projectName: string
   rangeStart: string
   totalDays: number
+  zoom: GanttZoom
   hasBaseline: boolean
   hasDataDate: boolean
 }) {
   const cells = buildDayCells({ startIso: rangeStart, totalDays })
   const monthGroups = buildMonthGroups(cells)
-  const useWeekNumbers = totalDays > AXIS_MONTH_TIER_MIN_DAYS
+  const useWeekNumbers = zoom === 'month'
   const weekOfMonthGroups = useWeekNumbers ? buildWeekOfMonthGroups(cells) : []
 
   return (
@@ -278,7 +282,7 @@ function ChartPageHeader({
                 ))
               : cells.map((c) => (
                   <Text key={c.iso} style={[styles.axisTickCell, { width: `${pct(1, totalDays)}%` }]}>
-                    {shouldLabelDay(c, totalDays) ? c.dayOfMonth : ''}
+                    {shouldLabelDay(c, zoom, totalDays) ? c.dayOfMonth : ''}
                   </Text>
                 ))}
           </View>
@@ -574,6 +578,7 @@ export function SchedulePdfDocument({
   dependencies,
   rangeStart,
   totalDays,
+  zoom,
   criticalIds,
   totalTasks,
   milestoneCount,
@@ -597,6 +602,7 @@ export function SchedulePdfDocument({
   dependencies: ScheduleDependency[]
   rangeStart: string
   totalDays: number
+  zoom: GanttZoom
   criticalIds: Set<string>
   totalTasks: number
   milestoneCount: number
@@ -710,6 +716,7 @@ export function SchedulePdfDocument({
           projectName={projectName}
           rangeStart={rangeStart}
           totalDays={totalDays}
+          zoom={zoom}
           hasBaseline={hasBaseline}
           hasDataDate={!!dataDate}
         />

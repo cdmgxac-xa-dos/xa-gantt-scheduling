@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { GanttChart } from '@/components/gantt/GanttChart'
-import { computeTimelineRange, type GanttZoom } from '@/components/gantt/ganttGeometry'
+import { computePrintRange, type GanttZoom } from '@/components/gantt/ganttGeometry'
 import {
   cascadeReschedule,
   computeCriticalPath,
@@ -361,7 +361,7 @@ export function SchedulePage() {
       import('@/components/SchedulePdfDocument'),
     ])
     const moduleGroups = buildModuleGroups()
-    const range = computeTimelineRange(tasks, todayIso())
+    const range = computePrintRange(tasks, todayIso())
     const generatedDate = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
 
     return pdf(
@@ -384,6 +384,7 @@ export function SchedulePage() {
         dependencies={dependencies}
         rangeStart={range.startIso}
         totalDays={range.totalDays}
+        zoom={zoom}
         criticalIds={criticalIds}
         totalTasks={stats.total}
         milestoneCount={stats.milestones}
@@ -435,7 +436,7 @@ export function SchedulePage() {
     try {
       const { buildScheduleWorkbookBlob } = await import('@/lib/scheduleExcelExport')
       const moduleGroups = buildModuleGroups()
-      const range = computeTimelineRange(tasks, todayIso())
+      const range = computePrintRange(tasks, todayIso())
       const generatedDate = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
 
       const blob = await buildScheduleWorkbookBlob({
