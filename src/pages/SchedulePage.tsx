@@ -347,6 +347,18 @@ export function SchedulePage() {
     return Array.from(byModule.entries()).map(([module, groupTasks]) => ({ module, tasks: groupTasks }))
   }
 
+  // "Shangrila Mactan - Rev 00 - 2026-09-17.pdf" instead of a generic
+  // "Project-Schedule-<date>" name, so a project's saved reports (and
+  // multiple projects' downloads) are recognizable by name at a glance
+  // instead of only by date. Characters invalid in a Windows/Mac filename
+  // are swapped for "-" since the project name is free text.
+  function buildReportFileName(extension: 'pdf' | 'xlsx'): string {
+    const projectName = (currentProject?.name || APP_TITLE).trim()
+    const revision = currentProject?.revision || '00'
+    const safeName = projectName.replace(/[\\/:*?"<>|]+/g, '-')
+    return `${safeName} - Rev ${revision} - ${todayIso()}.${extension}`
+  }
+
   function downloadBlob(blob: Blob, fileName: string) {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -447,7 +459,7 @@ export function SchedulePage() {
     setExporting('save')
     try {
       const blob = await buildPdfBlob()
-      const report = await saveReport(blob, `Project-Schedule-${todayIso()}.pdf`, currentProjectId)
+      const report = await saveReport(blob, buildReportFileName('pdf'), currentProjectId)
       setReports((prev) => [report, ...prev])
       setShowReports(true)
     } catch (e) {
@@ -478,7 +490,7 @@ export function SchedulePage() {
         rangeStart: range.startIso,
         totalDays: range.totalDays,
       })
-      downloadBlob(blob, `Project-Schedule-${todayIso()}.xlsx`)
+      downloadBlob(blob, buildReportFileName('xlsx'))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to export Excel file')
     } finally {
